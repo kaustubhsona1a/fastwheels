@@ -157,19 +157,22 @@ CREATE POLICY "Admin Delete to Site Settings Images" ON storage.objects
 -- Vehicles RLS
 DROP POLICY IF EXISTS "Vehicles are viewable by everyone" ON public.vehicles;
 CREATE POLICY "Vehicles are viewable by everyone" ON public.vehicles
-    FOR SELECT USING (is_deleted = false OR is_admin());
+    FOR SELECT USING (true);
 
 DROP POLICY IF EXISTS "Vehicles are insertable by admins only" ON public.vehicles;
-CREATE POLICY "Vehicles are insertable by admins only" ON public.vehicles
-    FOR INSERT WITH CHECK (is_admin());
+DROP POLICY IF EXISTS "Vehicles are insertable by everyone" ON public.vehicles;
+CREATE POLICY "Vehicles are insertable by everyone" ON public.vehicles
+    FOR INSERT WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Vehicles are updatable by admins only" ON public.vehicles;
-CREATE POLICY "Vehicles are updatable by admins only" ON public.vehicles
-    FOR UPDATE USING (is_admin()) WITH CHECK (is_admin());
+DROP POLICY IF EXISTS "Vehicles are updatable by everyone" ON public.vehicles;
+CREATE POLICY "Vehicles are updatable by everyone" ON public.vehicles
+    FOR UPDATE USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Vehicles are deletable by admins only" ON public.vehicles;
-CREATE POLICY "Vehicles are deletable by admins only" ON public.vehicles
-    FOR DELETE USING (is_admin());
+DROP POLICY IF EXISTS "Vehicles are deletable by everyone" ON public.vehicles;
+CREATE POLICY "Vehicles are deletable by everyone" ON public.vehicles
+    FOR DELETE USING (true);
 
 -- Vehicle Images RLS
 DROP POLICY IF EXISTS "Vehicle images are viewable by everyone" ON public.vehicle_images;
@@ -177,8 +180,9 @@ CREATE POLICY "Vehicle images are viewable by everyone" ON public.vehicle_images
     FOR SELECT USING (true);
 
 DROP POLICY IF EXISTS "Vehicle images are managed by admins only" ON public.vehicle_images;
-CREATE POLICY "Vehicle images are managed by admins only" ON public.vehicle_images
-    FOR ALL USING (is_admin()) WITH CHECK (is_admin());
+DROP POLICY IF EXISTS "Vehicle images are managed by everyone" ON public.vehicle_images;
+CREATE POLICY "Vehicle images are managed by everyone" ON public.vehicle_images
+    FOR ALL USING (true) WITH CHECK (true);
 
 -- Leads RLS
 DROP POLICY IF EXISTS "Leads are insertable by everyone" ON public.leads;

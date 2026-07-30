@@ -25,15 +25,34 @@
 }
 
 @layer base {
-  body {
+  html, body {
+    touch-action: manipulation;
+    -webkit-text-size-adjust: 100%;
     @apply bg-[#050505] text-[#D1D5DB] font-sans antialiased selection:bg-[#C1121F]/40 selection:text-white;
+    scroll-behavior: smooth;
+  }
+  body {
+    overflow-x: hidden;
   }
   h1, h2, h3, h4, h5, h6 {
     @apply font-orbitron text-white tracking-wider uppercase font-bold;
   }
   html {
     @apply font-sans bg-[#050505];
-    scroll-behavior: smooth;
+  }
+  /* Prevent iOS Mobile Safari auto-zooming when tapping/focusing inputs */
+  @media screen and (max-width: 768px) {
+    input[type="text"],
+    input[type="number"],
+    input[type="email"],
+    input[type="password"],
+    input[type="search"],
+    input[type="tel"],
+    input[type="url"],
+    select,
+    textarea {
+      font-size: 16px !important;
+    }
   }
 }
 

@@ -64,7 +64,7 @@ export default function Home() {
 
       {/* Hero Space - Styled with quick action buttons using red and black performance style */}
       <section className="relative min-h-[calc(100vh-72px)] flex flex-col items-center justify-center py-8 sm:py-0 overflow-hidden px-4 text-center z-20">
-        <div className="max-w-4xl mx-auto flex flex-col items-center justify-center w-full -mt-10 sm:mt-0">
+        <div className="max-w-4xl mx-auto flex flex-col items-center justify-center w-full -mt-14 sm:mt-0">
           
           <div className="mb-8 sm:mb-12 relative group">
             <div className="relative inline-block py-2 px-3 mb-4 sm:mb-6">

@@ -548,24 +548,44 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
       incrementMetric('supabaseWrites');
       try {
         const dbPayload = toDbPayload(cleaned);
-        console.log('[SUPABASE INSERT/UPSERT] Upserting vehicle:', targetId, dbPayload);
-        let { data, error } = await supabase.from('vehicles').upsert([dbPayload]).select();
-        if (error && (error.message?.includes('instagram_reel') || error.code === '42703')) {
-          console.warn('[SUPABASE INSERT RETRY] Column "instagram_reel" not supported on vehicles table. Retrying with features-fallback list...', error);
+        console.log('[SUPABASE INSERT/UPSERT] Upserting vehicle to table:', targetId, dbPayload);
+        
+        let { data, error } = await supabase.from('vehicles').upsert([dbPayload], { onConflict: 'id' }).select();
+        
+        if (error) {
+          console.warn('[SUPABASE INSERT RETRY] Full payload failed, retrying without optional columns...', error.message, error.code);
           const retryPayload = { ...dbPayload };
           delete retryPayload.instagram_reel;
-          const retryQuery = await supabase.from('vehicles').upsert([retryPayload]).select();
+          delete retryPayload.inspection_notes;
+          const retryQuery = await supabase.from('vehicles').upsert([retryPayload], { onConflict: 'id' }).select();
           data = retryQuery.data;
           error = retryQuery.error;
         }
+
         if (error) {
-          console.warn('[SUPABASE INSERT WARNING] Storage/DB insert failed, persisting to local state/cache:', error.message);
+          console.warn('[SUPABASE INSERT FALLBACK] Upsert failed, trying direct insert/update...', error.message);
+          // Try explicit update first
+          const updateRes = await supabase.from('vehicles').update(dbPayload).eq('id', targetId).select();
+          if (!updateRes.error && updateRes.data && updateRes.data.length > 0) {
+            data = updateRes.data;
+            error = null;
+          } else {
+            // Try explicit insert
+            const insertRes = await supabase.from('vehicles').insert([dbPayload]).select();
+            data = insertRes.data;
+            error = insertRes.error;
+          }
+        }
+
+        if (error) {
+          console.error('[SUPABASE DB INSERT ERROR] Vehicles table rejected record:', error);
+          alert(`Notice: Vehicle saved locally, but database table write returned: ${error.message}. Ensure Supabase table permissions and columns match schema.sql.`);
         } else {
-          console.log('[SUPABASE INSERT SUCCESS]', data);
+          console.log('[SUPABASE DB INSERT SUCCESS] Vehicle written to Supabase table:', data);
           await syncVehicleImages(targetId, cleaned.images);
           
           try {
-            await supabase.from('metadata_versions').upsert({ key: 'vehicles', version: Date.now(), updated_at: new Date().toISOString() });
+            await supabase.from('metadata_versions').upsert({ key: 'vehicles', version: Date.now(), updated_at: new Date().toISOString() }, { onConflict: 'key' });
           } catch (e) {
             console.warn('Metadata version update warning:', e);
           }
@@ -602,25 +622,36 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
         }
 
         const dbPayload = toDbPayload(cleaned);
-        console.log('[SUPABASE UPDATE/UPSERT] Upserting vehicle:', targetId, dbPayload);
-        let { data, error } = await supabase.from('vehicles').upsert([dbPayload]).select();
-        if (error && (error.message?.includes('instagram_reel') || error.code === '42703')) {
-          console.warn('[SUPABASE UPDATE RETRY] Column "instagram_reel" not supported on vehicles table. Retrying with features-fallback list...', error);
+        console.log('[SUPABASE UPDATE/UPSERT] Updating vehicle in Supabase table:', targetId, dbPayload);
+        
+        let { data, error } = await supabase.from('vehicles').upsert([dbPayload], { onConflict: 'id' }).select();
+        
+        if (error) {
+          console.warn('[SUPABASE UPDATE RETRY] Full payload failed, retrying without optional columns...', error.message, error.code);
           const retryPayload = { ...dbPayload };
           delete retryPayload.instagram_reel;
-          const retryQuery = await supabase.from('vehicles').upsert([retryPayload]).select();
+          delete retryPayload.inspection_notes;
+          const retryQuery = await supabase.from('vehicles').upsert([retryPayload], { onConflict: 'id' }).select();
           data = retryQuery.data;
           error = retryQuery.error;
         }
+
+        if (error) {
+          console.warn('[SUPABASE UPDATE FALLBACK] Upsert failed, trying direct update...', error.message);
+          const updateRes = await supabase.from('vehicles').update(dbPayload).eq('id', targetId).select();
+          data = updateRes.data;
+          error = updateRes.error;
+        }
         
         if (error) {
-          console.warn('[SUPABASE UPDATE WARNING] DB update failed, persisting to local state/cache:', error.message);
+          console.error('[SUPABASE DB UPDATE ERROR] Vehicles table rejected update:', error);
+          alert(`Notice: Vehicle updated locally, but database table write returned: ${error.message}. Check Supabase RLS policies.`);
         } else {
-          console.log('[SUPABASE UPDATE SUCCESS]', data);
+          console.log('[SUPABASE DB UPDATE SUCCESS] Vehicle updated in Supabase table:', data);
           await syncVehicleImages(targetId, cleaned.images);
 
           try {
-            await supabase.from('metadata_versions').upsert({ key: 'vehicles', version: Date.now(), updated_at: new Date().toISOString() });
+            await supabase.from('metadata_versions').upsert({ key: 'vehicles', version: Date.now(), updated_at: new Date().toISOString() }, { onConflict: 'key' });
           } catch (e) {
             console.warn('Metadata version update warning:', e);
           }

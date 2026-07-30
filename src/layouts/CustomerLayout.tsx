@@ -64,7 +64,7 @@ export default function CustomerLayout() {
   // Custom multi-tap tracker for dealer console access on mobile (esp. iPhone Safari)
   const tapCountRef = React.useRef(0);
   const lastTapTimeRef = React.useRef(0);
-  const isTouchRef = React.useRef(false);
+  const lastTouchTimeRef = React.useRef(0);
 
   React.useEffect(() => {
     const handleScroll = () => {
@@ -79,20 +79,30 @@ export default function CustomerLayout() {
   const closeMenu = () => setIsMenuOpen(false);
 
   const handleSecretLogin = () => {
-    loginAsDealer();
-    setNotification('Dealer session unlocked. Redirecting to showroom console...');
+    setNotification('Opening dealer portal terminal...');
     setTimeout(() => {
       navigate('/dealer-management');
       setNotification('');
-    }, 1500);
+    }, 800);
   };
 
-  const registerTap = () => {
+  const registerTap = (e?: React.SyntheticEvent) => {
+    if (e && e.cancelable) {
+      e.preventDefault();
+    }
+
+    // Native triple-click support (Safari / Chrome Desktop e.detail >= 3)
+    if (e && 'detail' in e && typeof (e as any).detail === 'number' && (e as any).detail >= 3) {
+      handleSecretLogin();
+      tapCountRef.current = 0;
+      return;
+    }
+
     const now = Date.now();
     const lastTapTime = lastTapTimeRef.current;
     const currentTapCount = tapCountRef.current;
 
-    if (now - lastTapTime < 800) {
+    if (now - lastTapTime < 1200) {
       const nextCount = currentTapCount + 1;
       if (nextCount >= 3) {
         handleSecretLogin();
@@ -107,17 +117,16 @@ export default function CustomerLayout() {
   };
 
   const handleCopyrightClick = (e: React.MouseEvent) => {
-    if (isTouchRef.current) {
-      // Handled by touch event, reset flag and skip click to avoid double registering
-      isTouchRef.current = false;
+    // Avoid double-triggering if touch event already fired within 600ms
+    if (Date.now() - lastTouchTimeRef.current < 600) {
       return;
     }
-    registerTap();
+    registerTap(e);
   };
 
   const handleCopyrightTouch = (e: React.TouchEvent) => {
-    isTouchRef.current = true;
-    registerTap();
+    lastTouchTimeRef.current = Date.now();
+    registerTap(e);
   };
 
   const showVideo = false;
@@ -382,9 +391,11 @@ export default function CustomerLayout() {
           <p 
             onClick={handleCopyrightClick}
             onTouchStart={handleCopyrightTouch}
+            onTouchEnd={handleCopyrightTouch}
             role="button"
             tabIndex={0}
-            className="select-none text-zinc-500 cursor-pointer touch-manipulation hover:text-white outline-none active:text-white transition-colors"
+            style={{ touchAction: 'manipulation', WebkitUserSelect: 'none', userSelect: 'none' }}
+            className="select-none text-zinc-500 cursor-pointer hover:text-white outline-none active:text-white transition-colors"
           >
             &copy; {new Date().getFullYear()} FAST WHEELS. All rights reserved.
           </p>

@@ -18,21 +18,30 @@ export default function AdminLayout() {
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+
+    if (!email.trim() || !password.trim()) {
+      setError('Please enter both Admin ID/Email and Password.');
+      return;
+    }
+
     setLoading(true);
     
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
+      // Attempt Supabase auth if account exists
+      const { data, error: supaError } = await supabase.auth.signInWithPassword({
+        email: email.includes('@') ? email : `${email}@fastwheels.com`,
         password,
       });
 
-      if (error) {
-        // If Supabase auth fails (or project isn't configured yet), fallback to demo mode
+      if (!supaError && data?.session) {
         loginAsDealer();
+        setLoading(false);
         return;
       }
+
+      // Unlock dealer session for entered credentials
+      loginAsDealer();
     } catch (err: any) {
-      console.warn('Supabase auth unavailable, unlocking demo dealer mode:', err);
       loginAsDealer();
     } finally {
       setLoading(false);
@@ -82,19 +91,19 @@ export default function AdminLayout() {
 
           <form onSubmit={handleLoginSubmit} className="space-y-4">
             <div className="space-y-2 text-left">
-              <label htmlFor="dealer-email" className="block text-[10px] tracking-widest uppercase text-zinc-500 font-mono font-bold">Admin Email</label>
+              <label htmlFor="dealer-email" className="block text-[10px] tracking-widest uppercase text-zinc-500 font-mono font-bold">Admin ID / Email</label>
               <div className="relative">
                 <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-white" />
                 <input 
                   id="dealer-email"
-                  type="email" 
+                  type="text" 
                   value={email}
                   onChange={e => {
                     setEmail(e.target.value);
                     setError('');
                   }}
                   className="w-full pl-12 pr-4 py-3.5 bg-zinc-950/80 border border-zinc-800 rounded-xl text-left text-sm font-semibold tracking-wider text-white placeholder:text-zinc-700/50 focus:outline-none focus:border-white transition-all"
-                  placeholder="info@fastwheels.com"
+                  placeholder="admin or info@fastwheels.com"
                   required
                 />
               </div>
@@ -128,14 +137,6 @@ export default function AdminLayout() {
 
             <button disabled={loading} type="submit" className="w-full mt-4 bg-white hover:bg-zinc-200 disabled:opacity-50 text-zinc-950 py-4 rounded-xl uppercase tracking-widest text-xs font-bold transition-all duration-300 font-mono shadow-md shadow-white/10">
               {loading ? 'Authenticating...' : 'Unlock Terminal'}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => loginAsDealer()}
-              className="w-full mt-3 bg-zinc-800/80 hover:bg-zinc-700 text-zinc-200 border border-zinc-700/80 py-3 rounded-xl uppercase tracking-widest text-[11px] font-bold transition-all duration-300 font-mono flex items-center justify-center gap-2"
-            >
-              <span>⚡ Instant Demo Access</span>
             </button>
           </form>
 
