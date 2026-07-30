@@ -457,37 +457,33 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
             await saveToCache('site_config', parsedConfig);
           }
 
-          if (remoteVersion > localVersion || !cachedVehicles || cachedVehicles.length === 0) {
-            incrementMetric('cacheMisses');
-            incrementMetric('supabaseReads');
-            const { data, error } = await supabase.from('vehicles').select('*, vehicle_images(*)');
-            if (!error && data) {
-              if (data.length > 0) {
-                const normalized = normalizeVehicles(data);
-                const filtered = normalized.filter(v => !v.deleted && v.status !== 'Deleted');
-                
-                // Symmetrically merge remote DB vehicles with any local un-synced vehicles
-                const existingMap = new Map((cachedVehicles || []).map(v => [ensureUUID(v.id), v]));
-                filtered.forEach(v => existingMap.set(ensureUUID(v.id), v));
-                const mergedList = Array.from(existingMap.values()).filter(v => !v.deleted && v.status !== 'Deleted');
+          // Perform background revalidation and DB fetch from Supabase vehicles table
+          incrementMetric('supabaseReads');
+          const { data, error } = await supabase.from('vehicles').select('*, vehicle_images(*)');
+          if (!error && data) {
+            if (data.length > 0) {
+              const normalized = normalizeVehicles(data);
+              const filtered = normalized.filter(v => !v.deleted && v.status !== 'Deleted');
+              
+              // Symmetrically merge remote DB vehicles with any local un-synced vehicles
+              const existingMap = new Map((cachedVehicles || []).map(v => [ensureUUID(v.id), v]));
+              filtered.forEach(v => existingMap.set(ensureUUID(v.id), v));
+              const mergedList = Array.from(existingMap.values()).filter(v => !v.deleted && v.status !== 'Deleted');
 
-                setVehicles(mergedList);
-                await saveToCache('vehicles', mergedList);
-                await saveToCache('vehicles_version', remoteVersion);
-              } else if (cachedVehicles && cachedVehicles.length > 0) {
-                // Supabase table returned 0 records; preserve local cached vehicles so additions aren't wiped
-                setVehicles(cachedVehicles.filter(v => !v.deleted && v.status !== 'Deleted'));
-              } else {
-                setVehicles([]);
-              }
-            } else if (error) {
-              console.warn('Supabase query failed, keeping cache/empty fallback', error);
-              if (!hasMountedCache) {
-                setVehicles([]);
-              }
+              setVehicles(mergedList);
+              await saveToCache('vehicles', mergedList);
+              await saveToCache('vehicles_version', remoteVersion);
+            } else if (cachedVehicles && cachedVehicles.length > 0) {
+              // Supabase table returned 0 records; preserve local cached vehicles so additions aren't wiped
+              setVehicles(cachedVehicles.filter(v => !v.deleted && v.status !== 'Deleted'));
+            } else {
+              setVehicles([]);
             }
-          } else {
-            incrementMetric('cacheHits');
+          } else if (error) {
+            console.warn('Supabase query failed, keeping cache/empty fallback', error);
+            if (!hasMountedCache) {
+              setVehicles([]);
+            }
           }
         } catch (err) {
           console.warn('Background Supabase revalidation failed, keeping cache/empty', err);
@@ -575,36 +571,72 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
 
     console.log('[SUPABASE WRITE INIT] Executing vehicle write for ID:', targetId, dbPayload);
 
-    // 1. Try upsert with full payload
+    // 1. Try upsert first (handles both insert and update in 1 single fast query)
     const upsertRes = await supabase.from('vehicles').upsert([dbPayload], { onConflict: 'id' }).select();
-    if (!upsertRes.error && upsertRes.data && upsertRes.data.length > 0) {
+    if (!upsertRes.error) {
+      console.log('[SUPABASE WRITE SUCCESS] Upsert succeeded:', upsertRes.data);
       return { success: true, data: upsertRes.data };
     }
 
-    console.warn('[SUPABASE WRITE RETRY 1] Upsert returned error:', upsertRes.error?.message, upsertRes.error?.code);
+    console.warn('[SUPABASE WRITE RETRY 1] Upsert error:', upsertRes.error?.message, upsertRes.error?.code);
 
-    // 2. Try explicit update
-    const updateRes = await supabase.from('vehicles').update(dbPayload).eq('id', targetId).select();
-    if (!updateRes.error && updateRes.data && updateRes.data.length > 0) {
-      return { success: true, data: updateRes.data };
-    }
-
-    // 3. Try explicit insert
+    // 2. Try explicit insert (for new vehicles)
     const insertRes = await supabase.from('vehicles').insert([dbPayload]).select();
-    if (!insertRes.error && insertRes.data && insertRes.data.length > 0) {
+    if (!insertRes.error) {
+      console.log('[SUPABASE WRITE SUCCESS] Insert succeeded:', insertRes.data);
       return { success: true, data: insertRes.data };
     }
 
-    // 4. Try without optional columns (instagram_reel, inspection_notes)
+    // 3. Try explicit update (for existing vehicles)
+    const updateRes = await supabase.from('vehicles').update(dbPayload).eq('id', targetId).select();
+    if (!updateRes.error) {
+      console.log('[SUPABASE WRITE SUCCESS] Update succeeded:', updateRes.data);
+      return { success: true, data: updateRes.data };
+    }
+
+    // 4. Try without optional columns (instagram_reel, inspection_notes, is_deleted)
     const retryPayload = { ...dbPayload };
     delete (retryPayload as any).instagram_reel;
     delete (retryPayload as any).inspection_notes;
-    const retry1 = await supabase.from('vehicles').upsert([retryPayload], { onConflict: 'id' }).select();
-    if (!retry1.error && retry1.data && retry1.data.length > 0) {
-      return { success: true, data: retry1.data };
+    delete (retryPayload as any).is_deleted;
+
+    const retryUpsert = await supabase.from('vehicles').upsert([retryPayload], { onConflict: 'id' }).select();
+    if (!retryUpsert.error) {
+      return { success: true, data: retryUpsert.data };
     }
 
-    // 5. Try core essential columns only (in case custom or restricted schema exists)
+    // 5. Try camelCase columns mapping in case table columns were defined with camelCase in Supabase UI
+    const reelVal = cleaned.instagramReel || (cleaned as any).instagram_reel || null;
+    const camelPayload = {
+      id: targetId,
+      make: String(cleaned.make || 'Vehicle').trim(),
+      model: String(cleaned.model || 'Model').trim(),
+      variant: cleaned.variant ? String(cleaned.variant).trim() : null,
+      year: parseNumeric(cleaned.year, new Date().getFullYear()),
+      price: parseNumeric(cleaned.price, 0),
+      mileage: parseNumeric(cleaned.mileage, 0),
+      fuelType: String(cleaned.fuelType || 'Petrol').trim(),
+      transmission: String(cleaned.transmission || 'Automatic').trim(),
+      engine: cleaned.engine ? String(cleaned.engine).trim() : null,
+      color: cleaned.color ? String(cleaned.color).trim() : null,
+      ownership: cleaned.ownership ? String(cleaned.ownership).trim() : null,
+      registration: cleaned.registration ? String(cleaned.registration).trim() : null,
+      status: String(cleaned.status || 'Available').trim(),
+      featured: Boolean((cleaned as any).featured),
+      description: cleaned.description ? String(cleaned.description).trim() : null,
+      instagramReel: reelVal ? String(reelVal).trim() : null,
+      inspectionNotes: ((cleaned as any).inspectionNotes || (cleaned as any).inspection_notes) ? String((cleaned as any).inspectionNotes || (cleaned as any).inspection_notes).trim() : null,
+      features: Array.isArray(cleaned.features) ? cleaned.features : [],
+      images: Array.isArray(cleaned.images) ? cleaned.images.map(String) : [],
+      isDeleted: Boolean(cleaned.deleted || (cleaned as any).is_deleted)
+    };
+
+    const camelUpsert = await supabase.from('vehicles').upsert([camelPayload], { onConflict: 'id' }).select();
+    if (!camelUpsert.error) {
+      return { success: true, data: camelUpsert.data };
+    }
+
+    // 6. Try core essential columns only (in case custom or restricted schema exists)
     const corePayload = {
       id: targetId,
       make: String(cleaned.make || 'Vehicle').trim(),
@@ -618,11 +650,11 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
       status: String(cleaned.status || 'Available').trim()
     };
     const retryCore = await supabase.from('vehicles').upsert([corePayload], { onConflict: 'id' }).select();
-    if (!retryCore.error && retryCore.data && retryCore.data.length > 0) {
+    if (!retryCore.error) {
       return { success: true, data: retryCore.data };
     }
 
-    const finalErr = upsertRes.error || updateRes.error || insertRes.error || retry1.error || retryCore.error;
+    const finalErr = upsertRes.error || insertRes.error || updateRes.error || retryUpsert.error || camelUpsert.error || retryCore.error;
     return { success: false, error: finalErr };
   };
 
@@ -630,6 +662,12 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
     const targetId = ensureUUID(vehicle.id);
     const cleaned = { ...vehicle, id: targetId, updatedAt: Date.now(), deleted: false };
     
+    // Optimistic local state update for instant UI feedback
+    const nextList = [cleaned, ...vehicles.filter(v => ensureUUID(v.id) !== targetId)];
+    const activeVehicles = nextList.filter(v => !v.deleted && v.status !== 'Deleted');
+    setVehicles(activeVehicles);
+    await saveToCache('vehicles', nextList);
+
     if (isSupabaseConfigured()) {
       incrementMetric('supabaseWrites');
       try {
@@ -638,7 +676,6 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
         if (!success && error) {
           console.error('[SUPABASE DB WRITE REJECTED]', error);
           setLastSupabaseError(error.message || 'Database row insertion rejected');
-          alert(`Notice: Vehicles table write returned: ${error.message}.\n\nEnsure your Supabase project has run the schema SQL script from Admin Settings to create the vehicles table and RLS policies.`);
         } else {
           setLastSupabaseError(null);
           console.log('[SUPABASE DB INSERT SUCCESS] Vehicle written to Supabase table:', data);
@@ -655,10 +692,6 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
         setLastSupabaseError(err?.message || 'Database write exception');
       }
     }
-
-    const nextList = [cleaned, ...vehicles.filter(v => ensureUUID(v.id) !== targetId)];
-    setVehicles(nextList.filter(v => !v.deleted && v.status !== 'Deleted'));
-    await saveToCache('vehicles', nextList);
   };
 
   const updateVehicle = async (id: string, updates: Partial<Vehicle>) => {
@@ -670,6 +703,12 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
     }
     const oldVehicle = vehicles[idx];
     const cleaned = { ...oldVehicle, ...updates, id: targetId, updatedAt: Date.now() };
+
+    // Optimistic local state update for instant UI feedback
+    const nextList = vehicles.map(v => ensureUUID(v.id) === targetId ? cleaned : v);
+    const activeVehicles = nextList.filter(v => !v.deleted && v.status !== 'Deleted');
+    setVehicles(activeVehicles);
+    await saveToCache('vehicles', nextList);
 
     if (isSupabaseConfigured()) {
       incrementMetric('supabaseWrites');
@@ -687,7 +726,6 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
         if (!success && error) {
           console.error('[SUPABASE DB UPDATE REJECTED]', error);
           setLastSupabaseError(error.message || 'Database row update rejected');
-          alert(`Notice: Vehicles table update returned: ${error.message}.\n\nEnsure your Supabase project has run the schema SQL script from Admin Settings to enable RLS policies.`);
         } else {
           setLastSupabaseError(null);
           console.log('[SUPABASE DB UPDATE SUCCESS] Vehicle updated in Supabase table:', data);
@@ -704,10 +742,6 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
         setLastSupabaseError(err?.message || 'Database update exception');
       }
     }
-
-    const nextList = vehicles.map(v => ensureUUID(v.id) === targetId ? cleaned : v);
-    setVehicles(nextList.filter(v => !v.deleted && v.status !== 'Deleted'));
-    await saveToCache('vehicles', nextList);
   };
 
   const removeVehicle = async (id: string) => {

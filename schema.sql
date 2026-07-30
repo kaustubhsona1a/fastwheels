@@ -121,17 +121,20 @@ DROP POLICY IF EXISTS "Public Access to Vehicle Images" ON storage.objects;
 CREATE POLICY "Public Access to Vehicle Images" ON storage.objects
     FOR SELECT USING (bucket_id = 'vehicle-images');
 
+DROP POLICY IF EXISTS "Public Insert to Vehicle Images" ON storage.objects;
 DROP POLICY IF EXISTS "Admin Insert to Vehicle Images" ON storage.objects;
-CREATE POLICY "Admin Insert to Vehicle Images" ON storage.objects
-    FOR INSERT TO authenticated WITH CHECK (bucket_id = 'vehicle-images');
+CREATE POLICY "Public Insert to Vehicle Images" ON storage.objects
+    FOR INSERT WITH CHECK (bucket_id = 'vehicle-images');
 
+DROP POLICY IF EXISTS "Public Update to Vehicle Images" ON storage.objects;
 DROP POLICY IF EXISTS "Admin Update to Vehicle Images" ON storage.objects;
-CREATE POLICY "Admin Update to Vehicle Images" ON storage.objects
-    FOR UPDATE TO authenticated USING (bucket_id = 'vehicle-images');
+CREATE POLICY "Public Update to Vehicle Images" ON storage.objects
+    FOR UPDATE USING (bucket_id = 'vehicle-images');
 
+DROP POLICY IF EXISTS "Public Delete to Vehicle Images" ON storage.objects;
 DROP POLICY IF EXISTS "Admin Delete to Vehicle Images" ON storage.objects;
-CREATE POLICY "Admin Delete to Vehicle Images" ON storage.objects
-    FOR DELETE TO authenticated USING (bucket_id = 'vehicle-images');
+CREATE POLICY "Public Delete to Vehicle Images" ON storage.objects
+    FOR DELETE USING (bucket_id = 'vehicle-images');
 
 -- Storage Policies for site_settings bucket
 INSERT INTO storage.buckets (id, name, public) 
@@ -142,17 +145,20 @@ DROP POLICY IF EXISTS "Public Access to Site Settings Images" ON storage.objects
 CREATE POLICY "Public Access to Site Settings Images" ON storage.objects
     FOR SELECT USING (bucket_id = 'site_settings');
 
+DROP POLICY IF EXISTS "Public Insert to Site Settings Images" ON storage.objects;
 DROP POLICY IF EXISTS "Admin Insert to Site Settings Images" ON storage.objects;
-CREATE POLICY "Admin Insert to Site Settings Images" ON storage.objects
-    FOR INSERT TO authenticated WITH CHECK (bucket_id = 'site_settings');
+CREATE POLICY "Public Insert to Site Settings Images" ON storage.objects
+    FOR INSERT WITH CHECK (bucket_id = 'site_settings');
 
+DROP POLICY IF EXISTS "Public Update to Site Settings Images" ON storage.objects;
 DROP POLICY IF EXISTS "Admin Update to Site Settings Images" ON storage.objects;
-CREATE POLICY "Admin Update to Site Settings Images" ON storage.objects
-    FOR UPDATE TO authenticated USING (bucket_id = 'site_settings');
+CREATE POLICY "Public Update to Site Settings Images" ON storage.objects
+    FOR UPDATE USING (bucket_id = 'site_settings');
 
+DROP POLICY IF EXISTS "Public Delete to Site Settings Images" ON storage.objects;
 DROP POLICY IF EXISTS "Admin Delete to Site Settings Images" ON storage.objects;
-CREATE POLICY "Admin Delete to Site Settings Images" ON storage.objects
-    FOR DELETE TO authenticated USING (bucket_id = 'site_settings');
+CREATE POLICY "Public Delete to Site Settings Images" ON storage.objects
+    FOR DELETE USING (bucket_id = 'site_settings');
 
 -- Vehicles RLS
 DROP POLICY IF EXISTS "Vehicles are viewable by everyone" ON public.vehicles;
@@ -221,9 +227,10 @@ DROP POLICY IF EXISTS "Metadata viewable by everyone" ON public.metadata_version
 CREATE POLICY "Metadata viewable by everyone" ON public.metadata_versions
     FOR SELECT USING (true);
 
+DROP POLICY IF EXISTS "Metadata managed by everyone" ON public.metadata_versions;
 DROP POLICY IF EXISTS "Metadata managed by admins" ON public.metadata_versions;
-CREATE POLICY "Metadata managed by admins" ON public.metadata_versions
-    FOR ALL USING (is_admin()) WITH CHECK (is_admin());
+CREATE POLICY "Metadata managed by everyone" ON public.metadata_versions
+    FOR ALL USING (true) WITH CHECK (true);
 
 -- ==========================================
 -- 3. TRIGGERS

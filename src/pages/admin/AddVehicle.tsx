@@ -1,5 +1,5 @@
 import React, { useState, ChangeEvent, FormEvent, useEffect, useRef } from 'react';
-import { UploadCloud, X, Plus } from 'lucide-react';
+import { UploadCloud, X, Plus, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useVehicles } from '../../context/VehicleContext';
 import { Vehicle } from '../../data/mockData';
@@ -29,6 +29,8 @@ export default function AdminAddVehicle() {
   }, []);
 
   const [isCompressing, setIsCompressing] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [notification, setNotification] = useState<{ type: 'info' | 'success' | 'error'; message: string } | null>(null);
 
   const [formData, setFormData] = useState({
     make: '',
@@ -104,6 +106,10 @@ export default function AdminAddVehicle() {
     if (e.target.files) {
       const files = Array.from(e.target.files) as File[];
       setIsCompressing(true);
+      setNotification({
+        type: 'info',
+        message: `Uploading ${files.length} image(s)...`
+      });
       try {
         const promises = files.map(file => uploadImageToStorage(file, 'vehicles'));
         const results = await Promise.all(promises);
@@ -119,9 +125,17 @@ export default function AdminAddVehicle() {
           }
           return newImages;
         });
+        setNotification({
+          type: 'success',
+          message: `${results.length} image(s) uploaded successfully.`
+        });
+        setTimeout(() => setNotification(null), 3000);
       } catch (err) {
         console.error('Failed to upload images', err);
-        console.warn('Failed to upload some images to Supabase storage bucket:', err);
+        setNotification({
+          type: 'error',
+          message: 'Failed to upload some images. Please try again.'
+        });
       } finally {
         setIsCompressing(false);
       }
@@ -154,7 +168,14 @@ export default function AdminAddVehicle() {
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return; // Prevent duplicate uploads on multiple clicks
+
+    setIsSubmitting(true);
     formSaved.current = true;
+    setNotification({
+      type: 'info',
+      message: isEditing ? 'Saving changes to vehicle...' : 'Saving vehicle specs & updating inventory...'
+    });
     
     try {
       if (isEditing && id) {
@@ -198,11 +219,23 @@ export default function AdminAddVehicle() {
         };
         await addVehicle(newVehicle);
       }
-    } catch (err) {
+
+      setNotification({
+        type: 'success',
+        message: 'Vehicle saved successfully! Redirecting to inventory...'
+      });
+
+      setTimeout(() => {
+        navigate('/dealer-management/inventory');
+      }, 300);
+    } catch (err: any) {
       console.warn('Vehicle save warning:', err);
+      setNotification({
+        type: 'error',
+        message: err?.message || 'Error saving vehicle. Please try again.'
+      });
+      setIsSubmitting(false);
     }
-    
-    navigate('/dealer-management/inventory');
   };
 
   const handleChange = (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -211,6 +244,24 @@ export default function AdminAddVehicle() {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-8 max-w-4xl font-sans">
+      {/* Top Banner Notification */}
+      {notification && (
+        <div className={`p-4 rounded-xl border flex items-center justify-between text-xs font-mono font-bold tracking-wider transition-all shadow-lg ${
+          notification.type === 'info'
+            ? 'bg-blue-500/10 border-blue-500/30 text-blue-300'
+            : notification.type === 'success'
+            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+            : 'bg-red-500/10 border-red-500/30 text-red-300'
+        }`}>
+          <div className="flex items-center gap-3">
+            {notification.type === 'info' && <Loader2 className="w-5 h-5 animate-spin text-blue-400 shrink-0" />}
+            {notification.type === 'success' && <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />}
+            {notification.type === 'error' && <AlertCircle className="w-5 h-5 text-red-400 shrink-0" />}
+            <span>{notification.message}</span>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-2xl sm:text-3xl font-serif font-bold text-white tracking-widest uppercase">{isEditing ? 'Edit Vehicle' : 'Add New Vehicle'}</h1>
@@ -220,7 +271,20 @@ export default function AdminAddVehicle() {
           <Link to="/dealer-management/inventory" className="flex-grow sm:flex-grow-0 text-center px-4 sm:px-5 py-3.5 bg-zinc-900/40 border border-white/5 text-zinc-300 hover:text-white hover:bg-zinc-800/50 rounded-xl text-xs font-bold tracking-widest font-mono uppercase transition-all">
             Cancel
           </Link>
-          <button type="submit" className="flex-grow sm:flex-grow-0 text-center px-4 sm:px-6 py-3.5 bg-white hover:bg-zinc-900 text-zinc-950 hover:text-white border border-transparent hover:border-white/20 rounded-xl text-xs font-bold tracking-widest font-mono uppercase transition-all shadow-sm">{isEditing ? 'Save Changes' : 'Save Vehicle'}</button>
+          <button 
+            type="submit" 
+            disabled={isSubmitting || isCompressing}
+            className="flex-grow sm:flex-grow-0 text-center px-4 sm:px-6 py-3.5 bg-white hover:bg-zinc-200 text-zinc-950 border border-transparent rounded-xl text-xs font-bold tracking-widest font-mono uppercase transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          >
+            {isSubmitting ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                <span>Saving...</span>
+              </>
+            ) : (
+              <span>{isEditing ? 'Save Changes' : 'Save Vehicle'}</span>
+            )}
+          </button>
         </div>
       </div>
 
