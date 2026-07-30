@@ -86,6 +86,11 @@ export function sanitizeAboutImage(path: string | undefined): string {
   return path;
 }
 
+export function isValidUUID(id: string | null | undefined): boolean {
+  if (!id || typeof id !== 'string') return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id.trim());
+}
+
 const isSupabaseConfigured = () => {
   const url = import.meta.env.VITE_SUPABASE_URL;
   const key = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_ANON;
@@ -474,44 +479,35 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
 
           const { data, error } = await supabase.from('vehicles').select('*, vehicle_images(*)');
           if (!error && data) {
-            if (data.length > 0) {
-              const normalized = normalizeVehicles(data);
-              const filtered = normalized.filter(v => {
-                if (!v) return false;
-                const normId = ensureUUID(v.id).toLowerCase();
-                const rawId = String(v.id || '').toLowerCase();
-                return !v.deleted && v.status !== 'Deleted' && !deletedSet.has(normId) && !deletedSet.has(rawId);
-              });
-              
-              // Symmetrically merge remote DB vehicles with any local un-synced vehicles
-              const vehicleMap = new Map(filtered.map(v => [ensureUUID(v.id), v]));
-              (cachedVehicles || []).forEach(v => {
-                if (!v) return;
-                const normId = ensureUUID(v.id).toLowerCase();
-                const rawId = String(v.id || '').toLowerCase();
-                if (!v.deleted && v.status !== 'Deleted' && !deletedSet.has(normId) && !deletedSet.has(rawId)) {
-                  if (!vehicleMap.has(normId)) {
-                    vehicleMap.set(normId, v);
-                  }
-                }
-              });
+            const normalized = normalizeVehicles(data);
+            const activeFromSupabase = normalized.filter(v => {
+              if (!v) return false;
+              const isDel = v.deleted || (v as any).is_deleted || v.status === 'Deleted';
+              const normId = ensureUUID(v.id).toLowerCase();
+              const rawId = String(v.id || '').toLowerCase();
+              return !isDel && !deletedSet.has(normId) && !deletedSet.has(rawId);
+            });
 
-              const mergedList = Array.from(vehicleMap.values());
-              setVehicles(mergedList);
-              await saveToCache('vehicles', mergedList);
-              await saveToCache('vehicles_version', remoteVersion);
-            } else if (cachedVehicles && cachedVehicles.length > 0) {
-              // Supabase table returned 0 records; preserve local cached vehicles so additions aren't wiped
-              const validCached = cachedVehicles.filter(v => {
-                if (!v) return false;
-                const normId = ensureUUID(v.id).toLowerCase();
-                const rawId = String(v.id || '').toLowerCase();
-                return !v.deleted && v.status !== 'Deleted' && !deletedSet.has(normId) && !deletedSet.has(rawId);
-              });
-              setVehicles(validCached);
-            } else {
-              setVehicles([]);
-            }
+            // Preserve only genuine unsynced local offline creations
+            const offlineUnsynced = (cachedVehicles || []).filter(v => {
+              if (!v || !(v as any)._unsyncedLocal) return false;
+              const normId = ensureUUID(v.id).toLowerCase();
+              const rawId = String(v.id || '').toLowerCase();
+              const isDel = v.deleted || (v as any).is_deleted || v.status === 'Deleted';
+              return !isDel && !deletedSet.has(normId) && !deletedSet.has(rawId);
+            });
+
+            const mergedList = [...activeFromSupabase];
+            offlineUnsynced.forEach(v => {
+              const normId = ensureUUID(v.id).toLowerCase();
+              if (!mergedList.some(existing => ensureUUID(existing.id).toLowerCase() === normId)) {
+                mergedList.push(v);
+              }
+            });
+
+            setVehicles(mergedList);
+            await saveToCache('vehicles', mergedList);
+            await saveToCache('vehicles_version', remoteVersion);
           } else if (error) {
             console.warn('Supabase query failed, keeping cache/empty fallback', error);
             if (!hasMountedCache) {
@@ -596,6 +592,36 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     fetchInventory();
     fetchLeads();
+
+    if (!isSupabaseConfigured()) return;
+
+    let channel: any = null;
+    try {
+      channel = supabase
+        .channel('public-db-sync')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, () => {
+          console.log('[SUPABASE REALTIME] Vehicles table changed, re-fetching inventory...');
+          fetchInventory();
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'metadata_versions' }, () => {
+          console.log('[SUPABASE REALTIME] Metadata version changed, re-fetching inventory...');
+          fetchInventory();
+        })
+        .subscribe();
+    } catch (e) {
+      console.warn('[REALTIME SUBSCRIPTION WARNING]', e);
+    }
+
+    const intervalId = setInterval(() => {
+      fetchInventory();
+    }, 10000);
+
+    return () => {
+      if (channel) {
+        try { supabase.removeChannel(channel); } catch (e) {}
+      }
+      clearInterval(intervalId);
+    };
   }, [isAdmin]);
 
   const executeVehicleDbWrite = async (cleaned: Vehicle): Promise<{ success: boolean; data?: any; error?: any }> => {
@@ -843,73 +869,52 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
           await deleteImagesFromStorage(vehicleToDelete.images, 'vehicle-images');
         }
         
-        console.log('[SUPABASE DELETE WORKFLOW] Cleaning dependencies and removing vehicle:', targetId, rawId);
-        
-        // 2. Clear foreign key references in vehicle_images and leads tables
-        await supabase.from('vehicle_images').delete().or(`vehicle_id.eq.${targetId},vehicle_id.eq.${rawId}`);
-        await supabase.from('leads').update({ vehicle_id: null }).or(`vehicle_id.eq.${targetId},vehicle_id.eq.${rawId}`);
+        // Collect ONLY valid UUIDs to prevent PostgreSQL 22P02 invalid input syntax errors
+        const validUuids = Array.from(new Set([
+          targetId,
+          rawId,
+          vehicleToDelete?.id ? ensureUUID(vehicleToDelete.id) : null,
+          vehicleToDelete?.id ? String(vehicleToDelete.id) : null
+        ].filter((val): val is string => Boolean(val && isValidUUID(val)))));
 
-        // 3. Perform hard delete on vehicles table in Supabase
-        const { data: hardDelData, error: hardDelErr } = await supabase
-          .from('vehicles')
-          .delete()
-          .or(`id.eq.${targetId},id.eq.${rawId}`)
-          .select();
+        console.log('[SUPABASE DELETE WORKFLOW] Cleaning dependencies and removing vehicle in Supabase for UUIDs:', validUuids);
 
-        let rowsDeleted = hardDelData ? hardDelData.length : 0;
+        if (validUuids.length > 0) {
+          // 1. Clear FKs in vehicle_images
+          await supabase.from('vehicle_images').delete().in('vehicle_id', validUuids);
+          
+          // 2. Clear FKs in leads
+          await supabase.from('leads').update({ vehicle_id: null }).in('vehicle_id', validUuids);
 
-        if (rowsDeleted === 0 && vehicleToDelete?.registration) {
-          console.log('[SUPABASE DELETE FALLBACK] Attempting delete by registration:', vehicleToDelete.registration);
-          const { data: regDelData } = await supabase
-            .from('vehicles')
-            .delete()
-            .eq('registration', vehicleToDelete.registration)
-            .select();
-          if (regDelData && regDelData.length > 0) rowsDeleted += regDelData.length;
+          // 3. Hard delete from vehicles table in Supabase
+          const { error: hardDelErr } = await supabase.from('vehicles').delete().in('id', validUuids);
+          if (hardDelErr) {
+            console.warn('[SUPABASE HARD DELETE WARNING]', hardDelErr.message);
+          }
+
+          // 4. Soft-delete backup in Supabase in case hard DELETE RLS policy is restricted
+          await supabase.from('vehicles').update({ status: 'Deleted', is_deleted: true }).in('id', validUuids);
         }
 
-        if (rowsDeleted === 0 && vehicleToDelete?.make && vehicleToDelete?.model) {
-          console.log('[SUPABASE DELETE FALLBACK] Attempting delete by make/model:', vehicleToDelete.make, vehicleToDelete.model);
-          const { data: mmDelData } = await supabase
-            .from('vehicles')
-            .delete()
-            .eq('make', vehicleToDelete.make)
-            .eq('model', vehicleToDelete.model)
-            .eq('year', vehicleToDelete.year)
-            .select();
-          if (mmDelData && mmDelData.length > 0) rowsDeleted += mmDelData.length;
-        }
-
-        // 4. Soft-delete backup in Supabase in case hard DELETE RLS policy is restricted or missing
-        console.log('[SUPABASE DELETE SOFT-FALLBACK] Ensuring soft-delete status in Supabase table...');
-        await supabase
-          .from('vehicles')
-          .update({ status: 'Deleted', is_deleted: true })
-          .or(`id.eq.${targetId},id.eq.${rawId}`);
-
+        // Additional fallback by registration or make/model/year
         if (vehicleToDelete?.registration) {
-          await supabase
-            .from('vehicles')
-            .update({ status: 'Deleted', is_deleted: true })
-            .eq('registration', vehicleToDelete.registration);
+          await supabase.from('vehicles').delete().eq('registration', vehicleToDelete.registration);
+          await supabase.from('vehicles').update({ status: 'Deleted', is_deleted: true }).eq('registration', vehicleToDelete.registration);
         }
 
         if (vehicleToDelete?.make && vehicleToDelete?.model) {
-          await supabase
-            .from('vehicles')
-            .update({ status: 'Deleted', is_deleted: true })
+          await supabase.from('vehicles').delete()
+            .eq('make', vehicleToDelete.make)
+            .eq('model', vehicleToDelete.model)
+            .eq('year', vehicleToDelete.year);
+          await supabase.from('vehicles').update({ status: 'Deleted', is_deleted: true })
             .eq('make', vehicleToDelete.make)
             .eq('model', vehicleToDelete.model)
             .eq('year', vehicleToDelete.year);
         }
 
-        if (hardDelErr) {
-          console.warn('[SUPABASE HARD DELETE WARNING]', hardDelErr.message);
-          setLastSupabaseError(hardDelErr.message);
-        } else {
-          setLastSupabaseError(null);
-          console.log(`[SUPABASE DELETE SUCCESS] Vehicle removed from Supabase (${rowsDeleted} rows hard-deleted, soft-delete flags applied)`);
-        }
+        setLastSupabaseError(null);
+        console.log('[SUPABASE DELETE SUCCESS] Vehicle successfully deleted/marked in Supabase DB.');
 
         // 5. Bump metadata version for sync
         try {
