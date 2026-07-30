@@ -30,7 +30,7 @@ export default function Inventory() {
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
 
   const filteredCars = useMemo(() => {
-    let result = vehicles.filter(car => car.status === 'Available');
+    let result = vehicles.filter(car => !car.status || car.status.toLowerCase() === 'available');
     
     // Search filter
     if (searchTerm) {

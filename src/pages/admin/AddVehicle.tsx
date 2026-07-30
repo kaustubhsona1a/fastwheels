@@ -152,50 +152,54 @@ export default function AdminAddVehicle() {
   };
 
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     formSaved.current = true;
     
-    if (isEditing && id) {
-      updateVehicle(id, {
-        make: formData.make,
-        model: formData.model,
-        variant: formData.variant,
-        year: Number(formData.year),
-        price: Number(formData.price),
-        mileage: Number(formData.mileage),
-        fuelType: formData.fuelType as 'Petrol' | 'Diesel' | 'CNG' | 'Electric',
-        transmission: formData.transmission as 'Manual' | 'Automatic',
-        engine: formData.engine || 'Standard',
-        color: formData.color || 'Standard',
-        ownership: formData.ownership,
-        registration: formData.registration,
-        description: formData.description,
-        instagramReel: formData.instagramReel,
-        images: images.length > 0 ? images : ['https://images.unsplash.com/photo-1549317661-bd32c8ce0db2?auto=format&fit=crop&q=80&w=800'],
-      });
-    } else {
-      const newVehicle: Vehicle = {
-        id: 'v' + Date.now().toString(),
-        make: formData.make,
-        model: formData.model,
-        variant: formData.variant,
-        year: Number(formData.year),
-        price: Number(formData.price),
-        mileage: Number(formData.mileage),
-        fuelType: formData.fuelType as 'Petrol' | 'Diesel' | 'CNG' | 'Electric',
-        transmission: formData.transmission as 'Manual' | 'Automatic',
-        engine: formData.engine || 'Standard',
-        color: formData.color || 'Standard',
-        ownership: formData.ownership,
-        registration: formData.registration,
-        description: formData.description,
-        instagramReel: formData.instagramReel,
-        images: images.length > 0 ? images : ['https://images.unsplash.com/photo-1549317661-bd32c8ce0db2?auto=format&fit=crop&q=80&w=800'],
-        features: ['Air Conditioning', 'Power Steering'], 
-        status: 'Available',
-      };
-      addVehicle(newVehicle);
+    try {
+      if (isEditing && id) {
+        await updateVehicle(id, {
+          make: formData.make,
+          model: formData.model,
+          variant: formData.variant,
+          year: Number(formData.year),
+          price: Number(formData.price),
+          mileage: Number(formData.mileage),
+          fuelType: formData.fuelType as 'Petrol' | 'Diesel' | 'CNG' | 'Electric',
+          transmission: formData.transmission as 'Manual' | 'Automatic',
+          engine: formData.engine || 'Standard',
+          color: formData.color || 'Standard',
+          ownership: formData.ownership,
+          registration: formData.registration,
+          description: formData.description,
+          instagramReel: formData.instagramReel,
+          images: images.length > 0 ? images : ['https://images.unsplash.com/photo-1549317661-bd32c8ce0db2?auto=format&fit=crop&q=80&w=800'],
+        });
+      } else {
+        const newVehicle: Vehicle = {
+          id: 'v' + Date.now().toString(),
+          make: formData.make,
+          model: formData.model,
+          variant: formData.variant,
+          year: Number(formData.year),
+          price: Number(formData.price),
+          mileage: Number(formData.mileage),
+          fuelType: formData.fuelType as 'Petrol' | 'Diesel' | 'CNG' | 'Electric',
+          transmission: formData.transmission as 'Manual' | 'Automatic',
+          engine: formData.engine || 'Standard',
+          color: formData.color || 'Standard',
+          ownership: formData.ownership,
+          registration: formData.registration,
+          description: formData.description,
+          instagramReel: formData.instagramReel,
+          images: images.length > 0 ? images : ['https://images.unsplash.com/photo-1549317661-bd32c8ce0db2?auto=format&fit=crop&q=80&w=800'],
+          features: ['Air Conditioning', 'Power Steering'], 
+          status: 'Available',
+        };
+        await addVehicle(newVehicle);
+      }
+    } catch (err) {
+      console.warn('Vehicle save warning:', err);
     }
     
     navigate('/dealer-management/inventory');

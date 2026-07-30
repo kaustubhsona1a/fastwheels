@@ -63,10 +63,10 @@ export default function Home() {
       </Helmet>
 
       {/* Hero Space - Styled with quick action buttons using red and black performance style */}
-      <section className="relative min-h-[calc(100vh-70px)] sm:min-h-[calc(100vh-80px)] flex flex-col items-center justify-center py-10 sm:py-16 overflow-hidden px-4 text-center z-20">
-        <div className="max-w-4xl mx-auto flex flex-col items-center justify-center w-full my-auto">
+      <section className="relative min-h-[calc(100vh-72px)] flex flex-col items-center justify-center py-8 sm:py-0 overflow-hidden px-4 text-center z-20">
+        <div className="max-w-4xl mx-auto flex flex-col items-center justify-center w-full -mt-10 sm:mt-0">
           
-          <div className="mb-10 sm:mb-12 relative group">
+          <div className="mb-8 sm:mb-12 relative group">
             <div className="relative inline-block py-2 px-3 mb-4 sm:mb-6">
               {/* Dynamic Speed Streaks behind text */}
               <div className="speed-line-streak-1"></div>

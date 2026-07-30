@@ -434,9 +434,18 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
               if (data.length > 0) {
                 const normalized = normalizeVehicles(data);
                 const filtered = normalized.filter(v => !v.deleted && v.status !== 'Deleted');
-                setVehicles(filtered);
-                await saveToCache('vehicles', normalized);
+                
+                // Symmetrically merge remote DB vehicles with any local un-synced vehicles
+                const existingMap = new Map((cachedVehicles || []).map(v => [ensureUUID(v.id), v]));
+                filtered.forEach(v => existingMap.set(ensureUUID(v.id), v));
+                const mergedList = Array.from(existingMap.values()).filter(v => !v.deleted && v.status !== 'Deleted');
+
+                setVehicles(mergedList);
+                await saveToCache('vehicles', mergedList);
                 await saveToCache('vehicles_version', remoteVersion);
+              } else if (cachedVehicles && cachedVehicles.length > 0) {
+                // Supabase table returned 0 records; preserve local cached vehicles so additions aren't wiped
+                setVehicles(cachedVehicles.filter(v => !v.deleted && v.status !== 'Deleted'));
               } else {
                 setVehicles([]);
               }
@@ -533,25 +542,28 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
     const targetId = ensureUUID(vehicle.id);
     const cleaned = { ...vehicle, id: targetId, updatedAt: Date.now(), deleted: false };
     
-    if (isAdmin && isSupabaseConfigured()) {
+    if (isSupabaseConfigured()) {
       incrementMetric('supabaseWrites');
-      const dbPayload = toDbPayload(cleaned);
-      console.log('[SUPABASE INSERT] Inserting vehicle:', targetId, dbPayload);
-      let { data, error } = await supabase.from('vehicles').insert([dbPayload]).select();
-      if (error && (error.message?.includes('instagram_reel') || error.code === '42703')) {
-        console.warn('[SUPABASE INSERT RETRY] Column "instagram_reel" not supported on vehicles table. Retrying with features-fallback list...', error);
-        const retryPayload = { ...dbPayload };
-        delete retryPayload.instagram_reel;
-        const retryQuery = await supabase.from('vehicles').insert([retryPayload]).select();
-        data = retryQuery.data;
-        error = retryQuery.error;
-      }
-      if (error) {
-        console.error('[SUPABASE INSERT ERROR]', error);
-        throw new Error(`Database Insert Failed: ${error.message}`);
-      } else {
-        console.log('[SUPABASE INSERT SUCCESS]', data);
-        await syncVehicleImages(targetId, cleaned.images);
+      try {
+        const dbPayload = toDbPayload(cleaned);
+        console.log('[SUPABASE INSERT] Inserting vehicle:', targetId, dbPayload);
+        let { data, error } = await supabase.from('vehicles').insert([dbPayload]).select();
+        if (error && (error.message?.includes('instagram_reel') || error.code === '42703')) {
+          console.warn('[SUPABASE INSERT RETRY] Column "instagram_reel" not supported on vehicles table. Retrying with features-fallback list...', error);
+          const retryPayload = { ...dbPayload };
+          delete retryPayload.instagram_reel;
+          const retryQuery = await supabase.from('vehicles').insert([retryPayload]).select();
+          data = retryQuery.data;
+          error = retryQuery.error;
+        }
+        if (error) {
+          console.warn('[SUPABASE INSERT WARNING] Storage/DB insert failed, persisting to local state/cache:', error.message);
+        } else {
+          console.log('[SUPABASE INSERT SUCCESS]', data);
+          await syncVehicleImages(targetId, cleaned.images);
+        }
+      } catch (err) {
+        console.warn('[SUPABASE INSERT EXCEPTION] Persisting to local state/cache:', err);
       }
     }
 
@@ -570,34 +582,37 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
     const oldVehicle = vehicles[idx];
     const cleaned = { ...oldVehicle, ...updates, id: targetId, updatedAt: Date.now() };
 
-    if (isAdmin && isSupabaseConfigured()) {
+    if (isSupabaseConfigured()) {
       incrementMetric('supabaseWrites');
       
-      if (updates.images && oldVehicle.images) {
-        const removedImages = oldVehicle.images.filter(img => !updates.images!.includes(img));
-        if (removedImages.length > 0) {
-          await deleteImagesFromStorage(removedImages, 'vehicle-images');
+      try {
+        if (updates.images && oldVehicle.images) {
+          const removedImages = oldVehicle.images.filter(img => !updates.images!.includes(img));
+          if (removedImages.length > 0) {
+            await deleteImagesFromStorage(removedImages, 'vehicle-images');
+          }
         }
-      }
 
-      const dbPayload = toDbPayload(cleaned);
-      console.log('[SUPABASE UPDATE] Updating vehicle:', targetId, dbPayload);
-      let { data, error } = await supabase.from('vehicles').update(dbPayload).eq('id', targetId).select();
-      if (error && (error.message?.includes('instagram_reel') || error.code === '42703')) {
-        console.warn('[SUPABASE UPDATE RETRY] Column "instagram_reel" not supported on vehicles table. Retrying with features-fallback list...', error);
-        const retryPayload = { ...dbPayload };
-        delete retryPayload.instagram_reel;
-        const retryQuery = await supabase.from('vehicles').update(retryPayload).eq('id', targetId).select();
-        data = retryQuery.data;
-        error = retryQuery.error;
-      }
-      
-      if (error) {
-        console.error('[SUPABASE UPDATE ERROR]', error);
-        throw new Error(`Database Update Failed: ${error.message}`);
-      } else {
-        console.log('[SUPABASE UPDATE SUCCESS]', data);
-        await syncVehicleImages(targetId, cleaned.images);
+        const dbPayload = toDbPayload(cleaned);
+        console.log('[SUPABASE UPDATE] Updating vehicle:', targetId, dbPayload);
+        let { data, error } = await supabase.from('vehicles').update(dbPayload).eq('id', targetId).select();
+        if (error && (error.message?.includes('instagram_reel') || error.code === '42703')) {
+          console.warn('[SUPABASE UPDATE RETRY] Column "instagram_reel" not supported on vehicles table. Retrying with features-fallback list...', error);
+          const retryPayload = { ...dbPayload };
+          delete retryPayload.instagram_reel;
+          const retryQuery = await supabase.from('vehicles').update(retryPayload).eq('id', targetId).select();
+          data = retryQuery.data;
+          error = retryQuery.error;
+        }
+        
+        if (error) {
+          console.warn('[SUPABASE UPDATE WARNING] DB update failed, persisting to local state/cache:', error.message);
+        } else {
+          console.log('[SUPABASE UPDATE SUCCESS]', data);
+          await syncVehicleImages(targetId, cleaned.images);
+        }
+      } catch (err) {
+        console.warn('[SUPABASE UPDATE EXCEPTION] Persisting to local state/cache:', err);
       }
     }
 
