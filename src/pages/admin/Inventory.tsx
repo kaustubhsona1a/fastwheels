@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { formatPrice } from '../../data/mockData';
-import { Search, Plus, Edit, Trash2 } from 'lucide-react';
+import { Search, Plus, Edit, Trash2, AlertCircle } from 'lucide-react';
 import { useVehicles } from '../../context/VehicleContext';
 
 export default function AdminInventory() {
-  const { vehicles, updateVehicle, removeVehicle } = useVehicles();
+  const { vehicles, updateVehicle, removeVehicle, lastSupabaseError } = useVehicles();
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('All Statuses');
   
@@ -17,6 +17,26 @@ export default function AdminInventory() {
 
   return (
     <div className="space-y-8">
+      {lastSupabaseError && (
+        <div className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-5 text-xs font-mono space-y-2">
+          <div className="flex items-center justify-between text-amber-400 font-bold text-sm">
+            <span className="flex items-center gap-2">
+              <AlertCircle className="w-5 h-5 shrink-0" />
+              Supabase Postgres Database Notice
+            </span>
+            <Link to="/dealer-management/settings" className="px-3 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 rounded-lg text-[10px] uppercase font-bold tracking-wider transition-all">
+              Go To Settings & Copy SQL
+            </Link>
+          </div>
+          <p className="text-zinc-300 leading-relaxed">
+            Your images are uploading to Supabase Storage, but Supabase rejected saving vehicle information to the Postgres database table.
+          </p>
+          <p className="text-amber-300 font-bold text-[11px] bg-black/40 p-2.5 rounded-lg border border-amber-500/10">
+            Error details: {lastSupabaseError}
+          </p>
+        </div>
+      )}
+
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-3xl font-serif font-bold text-white tracking-widest uppercase">Inventory Management</h1>

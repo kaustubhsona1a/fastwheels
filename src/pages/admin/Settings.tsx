@@ -172,19 +172,219 @@ export default function AdminSettings() {
 
 
 
-      {success && (
-        <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-5 py-4 rounded-xl text-xs font-bold uppercase tracking-wider font-mono flex items-center shadow-lg">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 mr-2.5 animate-ping"></span>
-          <span>{success}</span>
-        </div>
-      )}
+      <div className="bg-zinc-950/80 backdrop-blur-md border border-white/10 rounded-2xl p-6 shadow-2xl space-y-4">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-white/5 pb-4">
+          <div className="flex items-center gap-3">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center border ${
+              supabaseStatus === 'connected' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' :
+              supabaseStatus === 'error' ? 'bg-amber-500/10 border-amber-500/20 text-amber-400' :
+              'bg-zinc-800 border-zinc-700 text-zinc-400'
+            }`}>
+              {supabaseStatus === 'connected' ? <Wifi className="w-5 h-5" /> : <WifiOff className="w-5 h-5" />}
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-bold font-serif text-white uppercase tracking-widest">Supabase Database Health</h2>
+                <span className={`px-2 py-0.5 rounded text-[9px] font-bold font-mono uppercase tracking-wider border ${
+                  supabaseStatus === 'connected' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                  supabaseStatus === 'error' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' :
+                  'bg-zinc-800 text-zinc-400 border-zinc-700'
+                }`}>
+                  {supabaseStatus === 'connected' ? 'Connected & Active' :
+                   supabaseStatus === 'error' ? 'SQL Tables Missing or Uninitialized' :
+                   'Not Configured'}
+                </span>
+              </div>
+              <p className="text-zinc-400 text-[11px] font-mono mt-0.5">
+                {supabaseStatus === 'connected' ? 'Supabase Postgres tables (vehicles, vehicle_images, site_settings) are ready.' :
+                 'Your storage buckets work, but Postgres tables need to be created in Supabase SQL Editor.'}
+              </p>
+            </div>
+          </div>
 
-      {errorText && (
-        <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-5 py-4 rounded-xl text-xs font-bold uppercase tracking-wider font-mono flex items-center shadow-lg">
-          <span className="w-2 h-2 rounded-full bg-red-500 mr-2.5 animate-pulse"></span>
-          <span>{errorText}</span>
+          <button
+            onClick={() => {
+              const sqlScript = `-- Production Database Schema & RLS Policies for Jackpot Cars
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+CREATE TABLE IF NOT EXISTS public.admins (
+    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    email TEXT UNIQUE NOT NULL,
+    role TEXT DEFAULT 'admin',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.vehicles (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    make TEXT NOT NULL,
+    model TEXT NOT NULL,
+    variant TEXT,
+    year INT NOT NULL,
+    price BIGINT NOT NULL,
+    mileage INT NOT NULL,
+    fuel_type TEXT NOT NULL,
+    transmission TEXT NOT NULL,
+    engine TEXT,
+    color TEXT,
+    ownership TEXT,
+    registration TEXT,
+    status TEXT DEFAULT 'Available',
+    featured BOOLEAN DEFAULT false,
+    description TEXT,
+    instagram_reel TEXT,
+    inspection_notes TEXT,
+    features TEXT[] DEFAULT '{}',
+    images TEXT[] DEFAULT '{}',
+    is_deleted BOOLEAN DEFAULT false,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.vehicle_images (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    vehicle_id UUID REFERENCES public.vehicles(id) ON DELETE CASCADE,
+    image_url TEXT NOT NULL,
+    display_order INT DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.leads (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    customer_name TEXT NOT NULL,
+    phone TEXT NOT NULL,
+    email TEXT,
+    vehicle_id UUID REFERENCES public.vehicles(id) ON DELETE SET NULL,
+    message TEXT,
+    status TEXT DEFAULT 'New',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.site_settings (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    company_name TEXT NOT NULL,
+    address TEXT,
+    phone TEXT,
+    email TEXT,
+    instagram_url TEXT,
+    whatsapp_number TEXT,
+    google_maps_url TEXT,
+    about_image_url TEXT,
+    home_hero_image_url TEXT,
+    logo_url TEXT,
+    client_deliveries TEXT[] DEFAULT '{}',
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.metadata_versions (
+    key TEXT PRIMARY KEY,
+    version BIGINT NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+INSERT INTO public.metadata_versions (key, version) VALUES ('vehicles', 1) ON CONFLICT (key) DO NOTHING;
+INSERT INTO public.metadata_versions (key, version) VALUES ('site_settings', 1) ON CONFLICT (key) DO NOTHING;
+
+ALTER TABLE public.vehicles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.vehicle_images ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.leads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.site_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.admins ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.metadata_versions ENABLE ROW LEVEL SECURITY;
+
+CREATE OR REPLACE FUNCTION public.is_admin() RETURNS BOOLEAN AS $$
+BEGIN
+    RETURN EXISTS (SELECT 1 FROM public.admins WHERE id = auth.uid());
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+INSERT INTO storage.buckets (id, name, public) VALUES ('vehicle-images', 'vehicle-images', true) ON CONFLICT (id) DO NOTHING;
+INSERT INTO storage.buckets (id, name, public) VALUES ('site_settings', 'site_settings', true) ON CONFLICT (id) DO NOTHING;
+
+DROP POLICY IF EXISTS "Public Access to Vehicle Images" ON storage.objects;
+CREATE POLICY "Public Access to Vehicle Images" ON storage.objects FOR SELECT USING (bucket_id = 'vehicle-images');
+
+DROP POLICY IF EXISTS "Public Insert to Vehicle Images" ON storage.objects;
+CREATE POLICY "Public Insert to Vehicle Images" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'vehicle-images');
+
+DROP POLICY IF EXISTS "Public Update to Vehicle Images" ON storage.objects;
+CREATE POLICY "Public Update to Vehicle Images" ON storage.objects FOR UPDATE USING (bucket_id = 'vehicle-images');
+
+DROP POLICY IF EXISTS "Public Access to Site Settings Images" ON storage.objects;
+CREATE POLICY "Public Access to Site Settings Images" ON storage.objects FOR SELECT USING (bucket_id = 'site_settings');
+
+DROP POLICY IF EXISTS "Public Insert to Site Settings Images" ON storage.objects;
+CREATE POLICY "Public Insert to Site Settings Images" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'site_settings');
+
+DROP POLICY IF EXISTS "Vehicles are viewable by everyone" ON public.vehicles;
+CREATE POLICY "Vehicles are viewable by everyone" ON public.vehicles FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "Vehicles are insertable by everyone" ON public.vehicles;
+CREATE POLICY "Vehicles are insertable by everyone" ON public.vehicles FOR INSERT WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Vehicles are updatable by everyone" ON public.vehicles;
+CREATE POLICY "Vehicles are updatable by everyone" ON public.vehicles FOR UPDATE USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Vehicles are deletable by everyone" ON public.vehicles;
+CREATE POLICY "Vehicles are deletable by everyone" ON public.vehicles FOR DELETE USING (true);
+
+DROP POLICY IF EXISTS "Vehicle images are viewable by everyone" ON public.vehicle_images;
+CREATE POLICY "Vehicle images are viewable by everyone" ON public.vehicle_images FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "Vehicle images managed by everyone" ON public.vehicle_images;
+CREATE POLICY "Vehicle images managed by everyone" ON public.vehicle_images FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Leads insertable by everyone" ON public.leads;
+CREATE POLICY "Leads insertable by everyone" ON public.leads FOR INSERT WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Leads viewable by everyone" ON public.leads;
+CREATE POLICY "Leads viewable by everyone" ON public.leads FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "Site settings viewable by everyone" ON public.site_settings;
+CREATE POLICY "Site settings viewable by everyone" ON public.site_settings FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "Site settings managed by everyone" ON public.site_settings;
+CREATE POLICY "Site settings managed by everyone" ON public.site_settings FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Metadata viewable by everyone" ON public.metadata_versions;
+CREATE POLICY "Metadata viewable by everyone" ON public.metadata_versions FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "Metadata managed by everyone" ON public.metadata_versions;
+CREATE POLICY "Metadata managed by everyone" ON public.metadata_versions FOR ALL USING (true) WITH CHECK (true);
+`;
+              navigator.clipboard.writeText(sqlScript);
+              setSuccess('SQL Schema copied to clipboard! Paste it into Supabase SQL Editor and click Run.');
+              setTimeout(() => setSuccess(''), 6000);
+            }}
+            className="bg-white hover:bg-zinc-200 text-zinc-950 font-bold px-4 py-2.5 rounded-xl text-xs uppercase font-mono tracking-wider transition-all shrink-0 flex items-center gap-2 shadow-sm"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Copy SQL Setup Script</span>
+          </button>
         </div>
-      )}
+
+        {supabaseStatus === 'error' && (
+          <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 text-xs font-mono space-y-2">
+            <p className="text-amber-400 font-bold flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              Why tables are empty or vehicle details are not updating:
+            </p>
+            <p className="text-zinc-300 leading-relaxed">
+              Your image uploads go directly into Supabase Storage buckets, but vehicle data rows cannot be written because the database tables do not exist in your Supabase project yet.
+            </p>
+            <div className="bg-black/50 p-3 rounded-lg border border-white/5 space-y-1.5 text-zinc-400">
+              <p className="text-white font-bold text-[11px] uppercase tracking-wider">How to enable Supabase Database in 30 seconds:</p>
+              <p>1. Click the <strong className="text-white">"Copy SQL Setup Script"</strong> button above.</p>
+              <p>2. Go to your <strong className="text-white">Supabase Dashboard → SQL Editor</strong>.</p>
+              <p>3. Paste the script and click <strong className="text-emerald-400">Run</strong>.</p>
+            </div>
+            {supabaseErrorMsg && (
+              <p className="text-[10px] text-zinc-500 truncate pt-1 border-t border-amber-500/10">
+                Supabase query error: {supabaseErrorMsg}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
 
 
 

@@ -39,11 +39,12 @@ export interface DiagnosticMetrics {
   indexedDbSaves: number;
 }
 
-interface VehicleContextType {
+export interface VehicleContextType {
   vehicles: Vehicle[];
   leads: Lead[];
   siteConfig: SiteConfig;
   loading: boolean;
+  lastSupabaseError?: string | null;
   addVehicle: (vehicle: Vehicle) => Promise<void>;
   updateVehicle: (id: string, vehicle: Partial<Vehicle>) => Promise<void>;
   removeVehicle: (id: string) => Promise<void>;
@@ -86,7 +87,16 @@ export function sanitizeAboutImage(path: string | undefined): string {
 }
 
 const isSupabaseConfigured = () => {
-  return import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_URL !== 'YOUR_SUPABASE_URL';
+  const url = import.meta.env.VITE_SUPABASE_URL;
+  const key = import.meta.env.VITE_SUPABASE_ANON_KEY;
+  return Boolean(
+    url && 
+    url !== 'YOUR_SUPABASE_URL' && 
+    url.trim() !== '' &&
+    key &&
+    key !== 'YOUR_SUPABASE_ANON_KEY' &&
+    key.trim() !== ''
+  );
 };
 
 // Helper to guarantee a valid UUID format. If ID is already a UUID, returns it.
@@ -127,34 +137,52 @@ export function ensureUUID(id: string): string {
   return `${part1}-${part2}-${part3}-${part4}-${part5}`.toLowerCase();
 }
 
+// Helper to safely parse numbers and strip out currency symbols, commas, or spaces to avoid NaN errors in Postgres BIGINT/INT
+export function parseNumeric(val: any, fallback: number = 0): number {
+  if (typeof val === 'number') {
+    return isNaN(val) ? fallback : val;
+  }
+  if (val === null || val === undefined) return fallback;
+  const str = String(val).replace(/[^0-9.]/g, '');
+  if (!str) return fallback;
+  const parsed = Number(str);
+  return isNaN(parsed) ? fallback : Math.round(parsed);
+}
+
 // Convert a vehicle object into a database payload matching schema.sql's columns exactly
 export function toDbPayload(v: any) {
   const reelVal = v.instagramReel || v.instagram_reel || null;
-  const imgs = Array.isArray(v.images) ? v.images : [];
+  const imgs = Array.isArray(v.images) ? v.images.map(String) : [];
+  const rawFeatures = Array.isArray(v.features) ? v.features : [];
+  const cleanFeatures = rawFeatures
+    .filter((f: any) => typeof f === 'string' && f.trim().length > 0 && !f.startsWith('instagram_reel:'));
+
+  if (reelVal) {
+    cleanFeatures.push(`instagram_reel:${reelVal}`);
+  }
+
   return {
     id: ensureUUID(v.id),
-    make: v.make || '',
-    model: v.model || '',
-    variant: v.variant || null,
-    year: typeof v.year === 'number' ? v.year : Number(v.year || new Date().getFullYear()),
-    price: typeof v.price === 'number' ? v.price : Number(v.price || 0),
-    mileage: typeof v.mileage === 'number' ? v.mileage : Number(v.mileage || 0),
-    fuel_type: v.fuelType || v.fuel_type || 'Petrol',
-    transmission: v.transmission || 'Automatic',
-    engine: v.engine || null,
-    color: v.color || null,
-    ownership: v.ownership || null,
-    registration: v.registration || null,
-    status: v.status || 'Available',
-    featured: v.featured !== undefined ? v.featured : false,
-    description: v.description || null,
-    instagram_reel: reelVal,
-    inspection_notes: v.inspection_notes || v.inspectionNotes || null,
-    features: Array.isArray(v.features) ? (
-      reelVal ? [...v.features.filter((f: string) => !f.startsWith('instagram_reel:')), `instagram_reel:${reelVal}`] : v.features.filter((f: string) => !f.startsWith('instagram_reel:'))
-    ) : (reelVal ? [`instagram_reel:${reelVal}`] : []),
+    make: String(v.make || 'Vehicle').trim(),
+    model: String(v.model || 'Model').trim(),
+    variant: v.variant ? String(v.variant).trim() : null,
+    year: parseNumeric(v.year, new Date().getFullYear()),
+    price: parseNumeric(v.price, 0),
+    mileage: parseNumeric(v.mileage, 0),
+    fuel_type: String(v.fuelType || v.fuel_type || 'Petrol').trim(),
+    transmission: String(v.transmission || 'Automatic').trim(),
+    engine: v.engine ? String(v.engine).trim() : null,
+    color: v.color ? String(v.color).trim() : null,
+    ownership: v.ownership ? String(v.ownership).trim() : null,
+    registration: v.registration ? String(v.registration).trim() : null,
+    status: String(v.status || 'Available').trim(),
+    featured: Boolean(v.featured),
+    description: v.description ? String(v.description).trim() : null,
+    instagram_reel: reelVal ? String(reelVal).trim() : null,
+    inspection_notes: (v.inspection_notes || v.inspectionNotes) ? String(v.inspection_notes || v.inspectionNotes).trim() : null,
+    features: cleanFeatures,
     images: imgs,
-    is_deleted: v.deleted !== undefined ? v.deleted : (v.is_deleted !== undefined ? v.is_deleted : false)
+    is_deleted: Boolean(v.deleted || v.is_deleted)
   };
 }
 
@@ -199,6 +227,7 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [siteConfig, setSiteConfig] = useState<SiteConfig>(DEFAULT_CONFIG);
   const [loading, setLoading] = useState(true);
+  const [lastSupabaseError, setLastSupabaseError] = useState<string | null>(null);
 
   const [metrics, setMetrics] = useState<DiagnosticMetrics>({
     supabaseReads: 0,
@@ -540,6 +569,63 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
     fetchLeads();
   }, [isAdmin]);
 
+  const executeVehicleDbWrite = async (cleaned: Vehicle): Promise<{ success: boolean; data?: any; error?: any }> => {
+    const targetId = ensureUUID(cleaned.id);
+    const dbPayload = toDbPayload(cleaned);
+
+    console.log('[SUPABASE WRITE INIT] Executing vehicle write for ID:', targetId, dbPayload);
+
+    // 1. Try upsert with full payload
+    const upsertRes = await supabase.from('vehicles').upsert([dbPayload], { onConflict: 'id' }).select();
+    if (!upsertRes.error && upsertRes.data && upsertRes.data.length > 0) {
+      return { success: true, data: upsertRes.data };
+    }
+
+    console.warn('[SUPABASE WRITE RETRY 1] Upsert returned error:', upsertRes.error?.message, upsertRes.error?.code);
+
+    // 2. Try explicit update
+    const updateRes = await supabase.from('vehicles').update(dbPayload).eq('id', targetId).select();
+    if (!updateRes.error && updateRes.data && updateRes.data.length > 0) {
+      return { success: true, data: updateRes.data };
+    }
+
+    // 3. Try explicit insert
+    const insertRes = await supabase.from('vehicles').insert([dbPayload]).select();
+    if (!insertRes.error && insertRes.data && insertRes.data.length > 0) {
+      return { success: true, data: insertRes.data };
+    }
+
+    // 4. Try without optional columns (instagram_reel, inspection_notes)
+    const retryPayload = { ...dbPayload };
+    delete (retryPayload as any).instagram_reel;
+    delete (retryPayload as any).inspection_notes;
+    const retry1 = await supabase.from('vehicles').upsert([retryPayload], { onConflict: 'id' }).select();
+    if (!retry1.error && retry1.data && retry1.data.length > 0) {
+      return { success: true, data: retry1.data };
+    }
+
+    // 5. Try core essential columns only (in case custom or restricted schema exists)
+    const corePayload = {
+      id: targetId,
+      make: String(cleaned.make || 'Vehicle').trim(),
+      model: String(cleaned.model || 'Model').trim(),
+      variant: cleaned.variant ? String(cleaned.variant).trim() : null,
+      year: parseNumeric(cleaned.year, new Date().getFullYear()),
+      price: parseNumeric(cleaned.price, 0),
+      mileage: parseNumeric(cleaned.mileage, 0),
+      fuel_type: String(cleaned.fuelType || 'Petrol').trim(),
+      transmission: String(cleaned.transmission || 'Automatic').trim(),
+      status: String(cleaned.status || 'Available').trim()
+    };
+    const retryCore = await supabase.from('vehicles').upsert([corePayload], { onConflict: 'id' }).select();
+    if (!retryCore.error && retryCore.data && retryCore.data.length > 0) {
+      return { success: true, data: retryCore.data };
+    }
+
+    const finalErr = upsertRes.error || updateRes.error || insertRes.error || retry1.error || retryCore.error;
+    return { success: false, error: finalErr };
+  };
+
   const addVehicle = async (vehicle: Vehicle) => {
     const targetId = ensureUUID(vehicle.id);
     const cleaned = { ...vehicle, id: targetId, updatedAt: Date.now(), deleted: false };
@@ -547,39 +633,14 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
     if (isSupabaseConfigured()) {
       incrementMetric('supabaseWrites');
       try {
-        const dbPayload = toDbPayload(cleaned);
-        console.log('[SUPABASE INSERT/UPSERT] Upserting vehicle to table:', targetId, dbPayload);
-        
-        let { data, error } = await supabase.from('vehicles').upsert([dbPayload], { onConflict: 'id' }).select();
-        
-        if (error) {
-          console.warn('[SUPABASE INSERT RETRY] Full payload failed, retrying without optional columns...', error.message, error.code);
-          const retryPayload = { ...dbPayload };
-          delete retryPayload.instagram_reel;
-          delete retryPayload.inspection_notes;
-          const retryQuery = await supabase.from('vehicles').upsert([retryPayload], { onConflict: 'id' }).select();
-          data = retryQuery.data;
-          error = retryQuery.error;
-        }
+        const { success, data, error } = await executeVehicleDbWrite(cleaned);
 
-        if (error) {
-          console.warn('[SUPABASE INSERT FALLBACK] Upsert failed, trying direct insert/update...', error.message);
-          // Try explicit update first
-          const updateRes = await supabase.from('vehicles').update(dbPayload).eq('id', targetId).select();
-          if (!updateRes.error && updateRes.data && updateRes.data.length > 0) {
-            data = updateRes.data;
-            error = null;
-          } else {
-            // Try explicit insert
-            const insertRes = await supabase.from('vehicles').insert([dbPayload]).select();
-            data = insertRes.data;
-            error = insertRes.error;
-          }
-        }
-
-        if (error) {
-          console.warn('[SUPABASE DB INSERT NOTICE] Table write fallback to local cache:', error.message);
+        if (!success && error) {
+          console.error('[SUPABASE DB WRITE REJECTED]', error);
+          setLastSupabaseError(error.message || 'Database row insertion rejected');
+          alert(`Notice: Vehicles table write returned: ${error.message}.\n\nEnsure your Supabase project has run the schema SQL script from Admin Settings to create the vehicles table and RLS policies.`);
         } else {
+          setLastSupabaseError(null);
           console.log('[SUPABASE DB INSERT SUCCESS] Vehicle written to Supabase table:', data);
           await syncVehicleImages(targetId, cleaned.images);
           
@@ -589,8 +650,9 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
             console.warn('Metadata version update warning:', e);
           }
         }
-      } catch (err) {
-        console.warn('[SUPABASE INSERT EXCEPTION] Persisting to local state/cache:', err);
+      } catch (err: any) {
+        console.error('[SUPABASE INSERT EXCEPTION]', err);
+        setLastSupabaseError(err?.message || 'Database write exception');
       }
     }
 
@@ -620,31 +682,14 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
           }
         }
 
-        const dbPayload = toDbPayload(cleaned);
-        console.log('[SUPABASE UPDATE/UPSERT] Updating vehicle in Supabase table:', targetId, dbPayload);
+        const { success, data, error } = await executeVehicleDbWrite(cleaned);
         
-        let { data, error } = await supabase.from('vehicles').upsert([dbPayload], { onConflict: 'id' }).select();
-        
-        if (error) {
-          console.warn('[SUPABASE UPDATE RETRY] Full payload failed, retrying without optional columns...', error.message, error.code);
-          const retryPayload = { ...dbPayload };
-          delete retryPayload.instagram_reel;
-          delete retryPayload.inspection_notes;
-          const retryQuery = await supabase.from('vehicles').upsert([retryPayload], { onConflict: 'id' }).select();
-          data = retryQuery.data;
-          error = retryQuery.error;
-        }
-
-        if (error) {
-          console.warn('[SUPABASE UPDATE FALLBACK] Upsert failed, trying direct update...', error.message);
-          const updateRes = await supabase.from('vehicles').update(dbPayload).eq('id', targetId).select();
-          data = updateRes.data;
-          error = updateRes.error;
-        }
-        
-        if (error) {
-          console.warn('[SUPABASE DB UPDATE NOTICE] Table write fallback to local cache:', error.message);
+        if (!success && error) {
+          console.error('[SUPABASE DB UPDATE REJECTED]', error);
+          setLastSupabaseError(error.message || 'Database row update rejected');
+          alert(`Notice: Vehicles table update returned: ${error.message}.\n\nEnsure your Supabase project has run the schema SQL script from Admin Settings to enable RLS policies.`);
         } else {
+          setLastSupabaseError(null);
           console.log('[SUPABASE DB UPDATE SUCCESS] Vehicle updated in Supabase table:', data);
           await syncVehicleImages(targetId, cleaned.images);
 
@@ -654,8 +699,9 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
             console.warn('Metadata version update warning:', e);
           }
         }
-      } catch (err) {
-        console.warn('[SUPABASE UPDATE EXCEPTION] Persisting to local state/cache:', err);
+      } catch (err: any) {
+        console.error('[SUPABASE UPDATE EXCEPTION]', err);
+        setLastSupabaseError(err?.message || 'Database update exception');
       }
     }
 
@@ -981,6 +1027,7 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
       leads,
       siteConfig,
       loading,
+      lastSupabaseError,
       addVehicle,
       updateVehicle,
       removeVehicle,
