@@ -130,6 +130,7 @@ export function ensureUUID(id: string): string {
 // Convert a vehicle object into a database payload matching schema.sql's columns exactly
 export function toDbPayload(v: any) {
   const reelVal = v.instagramReel || v.instagram_reel || null;
+  const imgs = Array.isArray(v.images) ? v.images : [];
   return {
     id: ensureUUID(v.id),
     make: v.make || '',
@@ -152,6 +153,7 @@ export function toDbPayload(v: any) {
     features: Array.isArray(v.features) ? (
       reelVal ? [...v.features.filter((f: string) => !f.startsWith('instagram_reel:')), `instagram_reel:${reelVal}`] : v.features.filter((f: string) => !f.startsWith('instagram_reel:'))
     ) : (reelVal ? [`instagram_reel:${reelVal}`] : []),
+    images: imgs,
     is_deleted: v.deleted !== undefined ? v.deleted : (v.is_deleted !== undefined ? v.is_deleted : false)
   };
 }
@@ -546,13 +548,13 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
       incrementMetric('supabaseWrites');
       try {
         const dbPayload = toDbPayload(cleaned);
-        console.log('[SUPABASE INSERT] Inserting vehicle:', targetId, dbPayload);
-        let { data, error } = await supabase.from('vehicles').insert([dbPayload]).select();
+        console.log('[SUPABASE INSERT/UPSERT] Upserting vehicle:', targetId, dbPayload);
+        let { data, error } = await supabase.from('vehicles').upsert([dbPayload]).select();
         if (error && (error.message?.includes('instagram_reel') || error.code === '42703')) {
           console.warn('[SUPABASE INSERT RETRY] Column "instagram_reel" not supported on vehicles table. Retrying with features-fallback list...', error);
           const retryPayload = { ...dbPayload };
           delete retryPayload.instagram_reel;
-          const retryQuery = await supabase.from('vehicles').insert([retryPayload]).select();
+          const retryQuery = await supabase.from('vehicles').upsert([retryPayload]).select();
           data = retryQuery.data;
           error = retryQuery.error;
         }
@@ -561,6 +563,12 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
         } else {
           console.log('[SUPABASE INSERT SUCCESS]', data);
           await syncVehicleImages(targetId, cleaned.images);
+          
+          try {
+            await supabase.from('metadata_versions').upsert({ key: 'vehicles', version: Date.now(), updated_at: new Date().toISOString() });
+          } catch (e) {
+            console.warn('Metadata version update warning:', e);
+          }
         }
       } catch (err) {
         console.warn('[SUPABASE INSERT EXCEPTION] Persisting to local state/cache:', err);
@@ -594,13 +602,13 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
         }
 
         const dbPayload = toDbPayload(cleaned);
-        console.log('[SUPABASE UPDATE] Updating vehicle:', targetId, dbPayload);
-        let { data, error } = await supabase.from('vehicles').update(dbPayload).eq('id', targetId).select();
+        console.log('[SUPABASE UPDATE/UPSERT] Upserting vehicle:', targetId, dbPayload);
+        let { data, error } = await supabase.from('vehicles').upsert([dbPayload]).select();
         if (error && (error.message?.includes('instagram_reel') || error.code === '42703')) {
           console.warn('[SUPABASE UPDATE RETRY] Column "instagram_reel" not supported on vehicles table. Retrying with features-fallback list...', error);
           const retryPayload = { ...dbPayload };
           delete retryPayload.instagram_reel;
-          const retryQuery = await supabase.from('vehicles').update(retryPayload).eq('id', targetId).select();
+          const retryQuery = await supabase.from('vehicles').upsert([retryPayload]).select();
           data = retryQuery.data;
           error = retryQuery.error;
         }
@@ -610,6 +618,12 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
         } else {
           console.log('[SUPABASE UPDATE SUCCESS]', data);
           await syncVehicleImages(targetId, cleaned.images);
+
+          try {
+            await supabase.from('metadata_versions').upsert({ key: 'vehicles', version: Date.now(), updated_at: new Date().toISOString() });
+          } catch (e) {
+            console.warn('Metadata version update warning:', e);
+          }
         }
       } catch (err) {
         console.warn('[SUPABASE UPDATE EXCEPTION] Persisting to local state/cache:', err);
@@ -629,7 +643,7 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
     setVehicles(nextList);
     await saveToCache('vehicles', nextList);
 
-    if (isAdmin && isSupabaseConfigured()) {
+    if (isSupabaseConfigured()) {
       incrementMetric('supabaseWrites');
       try {
         if (vehicleToDelete?.images?.length) {
