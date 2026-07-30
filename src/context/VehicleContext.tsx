@@ -88,13 +88,15 @@ export function sanitizeAboutImage(path: string | undefined): string {
 
 const isSupabaseConfigured = () => {
   const url = import.meta.env.VITE_SUPABASE_URL;
-  const key = import.meta.env.VITE_SUPABASE_ANON_KEY;
+  const key = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_ANON;
   return Boolean(
     url && 
     url !== 'YOUR_SUPABASE_URL' && 
+    !url.includes('placeholder.supabase.co') &&
     url.trim() !== '' &&
     key &&
     key !== 'YOUR_SUPABASE_ANON_KEY' &&
+    key !== 'placeholder' &&
     key.trim() !== ''
   );
 };
@@ -331,12 +333,20 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
       const cachedVehicles = await getFromCache<Vehicle[]>('vehicles');
       const cachedConfig = await getFromCache<SiteConfig>('site_config');
       const localVersion = await getFromCache<number>('vehicles_version') || 0;
+      const deletedIdsList: string[] = (await getFromCache('deleted_vehicle_ids')) || [];
+      const initialDeletedSet = new Set(deletedIdsList.map(d => String(d).toLowerCase()));
 
       let hasMountedCache = false;
 
       if (cachedVehicles && cachedVehicles.length > 0) {
         const normalized = normalizeVehicles(cachedVehicles);
-        setVehicles(normalized.filter(v => !v.deleted && v.status !== 'Deleted'));
+        const validCached = normalized.filter(v => {
+          if (!v) return false;
+          const normId = ensureUUID(v.id).toLowerCase();
+          const rawId = String(v.id || '').toLowerCase();
+          return !v.deleted && v.status !== 'Deleted' && !initialDeletedSet.has(normId) && !initialDeletedSet.has(rawId);
+        });
+        setVehicles(validCached);
         hasMountedCache = true;
       } else {
         setVehicles([]);
@@ -459,23 +469,46 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
 
           // Perform background revalidation and DB fetch from Supabase vehicles table
           incrementMetric('supabaseReads');
+          const deletedIdsList: string[] = (await getFromCache('deleted_vehicle_ids')) || [];
+          const deletedSet = new Set(deletedIdsList.map(d => String(d).toLowerCase()));
+
           const { data, error } = await supabase.from('vehicles').select('*, vehicle_images(*)');
           if (!error && data) {
             if (data.length > 0) {
               const normalized = normalizeVehicles(data);
-              const filtered = normalized.filter(v => !v.deleted && v.status !== 'Deleted');
+              const filtered = normalized.filter(v => {
+                if (!v) return false;
+                const normId = ensureUUID(v.id).toLowerCase();
+                const rawId = String(v.id || '').toLowerCase();
+                return !v.deleted && v.status !== 'Deleted' && !deletedSet.has(normId) && !deletedSet.has(rawId);
+              });
               
               // Symmetrically merge remote DB vehicles with any local un-synced vehicles
-              const existingMap = new Map((cachedVehicles || []).map(v => [ensureUUID(v.id), v]));
-              filtered.forEach(v => existingMap.set(ensureUUID(v.id), v));
-              const mergedList = Array.from(existingMap.values()).filter(v => !v.deleted && v.status !== 'Deleted');
+              const vehicleMap = new Map(filtered.map(v => [ensureUUID(v.id), v]));
+              (cachedVehicles || []).forEach(v => {
+                if (!v) return;
+                const normId = ensureUUID(v.id).toLowerCase();
+                const rawId = String(v.id || '').toLowerCase();
+                if (!v.deleted && v.status !== 'Deleted' && !deletedSet.has(normId) && !deletedSet.has(rawId)) {
+                  if (!vehicleMap.has(normId)) {
+                    vehicleMap.set(normId, v);
+                  }
+                }
+              });
 
+              const mergedList = Array.from(vehicleMap.values());
               setVehicles(mergedList);
               await saveToCache('vehicles', mergedList);
               await saveToCache('vehicles_version', remoteVersion);
             } else if (cachedVehicles && cachedVehicles.length > 0) {
               // Supabase table returned 0 records; preserve local cached vehicles so additions aren't wiped
-              setVehicles(cachedVehicles.filter(v => !v.deleted && v.status !== 'Deleted'));
+              const validCached = cachedVehicles.filter(v => {
+                if (!v) return false;
+                const normId = ensureUUID(v.id).toLowerCase();
+                const rawId = String(v.id || '').toLowerCase();
+                return !v.deleted && v.status !== 'Deleted' && !deletedSet.has(normId) && !deletedSet.has(rawId);
+              });
+              setVehicles(validCached);
             } else {
               setVehicles([]);
             }
@@ -745,13 +778,63 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
   };
 
   const removeVehicle = async (id: string) => {
-    const targetId = ensureUUID(id);
-    const rawId = id;
-    const vehicleToDelete = vehicles.find(v => ensureUUID(v.id) === targetId || v.id === id);
+    const targetId = ensureUUID(id).toLowerCase();
+    const rawId = String(id).toLowerCase();
+    const vehicleToDelete = vehicles.find(v => {
+      if (!v) return false;
+      const vNorm = ensureUUID(v.id).toLowerCase();
+      const vRaw = String(v.id || '').toLowerCase();
+      return vNorm === targetId || vRaw === targetId || vNorm === rawId || vRaw === rawId;
+    });
 
-    const nextList = vehicles.filter(v => ensureUUID(v.id) !== targetId && v.id !== id);
+    // 1. Immediate optimistic UI update & cache update (filters out everywhere)
+    const nextList = vehicles.filter(v => {
+      if (!v) return false;
+      const vNorm = ensureUUID(v.id).toLowerCase();
+      const vRaw = String(v.id || '').toLowerCase();
+      return vNorm !== targetId && vRaw !== targetId && vNorm !== rawId && vRaw !== rawId;
+    });
     setVehicles(nextList);
     await saveToCache('vehicles', nextList);
+
+    // Persist deleted ID in local cache so background fetches never restore it
+    try {
+      const existingDeleted: string[] = (await getFromCache('deleted_vehicle_ids')) || [];
+      const updatedSet = new Set([
+        ...existingDeleted.map(d => String(d).toLowerCase()),
+        targetId,
+        rawId,
+        ...(vehicleToDelete?.id ? [String(vehicleToDelete.id).toLowerCase(), ensureUUID(vehicleToDelete.id).toLowerCase()] : [])
+      ]);
+      await saveToCache('deleted_vehicle_ids', Array.from(updatedSet));
+    } catch (e) {
+      console.warn('Failed to save deleted ID to local cache:', e);
+    }
+
+    // Clean up any legacy localStorage vehicle arrays
+    try {
+      ['fast_wheels_vehicles_v2', 'cartronics_vehicles_v2', 'lust_over_rust_vehicles_v2', 'jackpot_cars_vehicles_v2'].forEach(key => {
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+              const cleaned = parsed.filter((v: any) => {
+                if (!v) return false;
+                const vNorm = ensureUUID(v.id).toLowerCase();
+                const vRaw = String(v.id || '').toLowerCase();
+                return vNorm !== targetId && vRaw !== targetId && vNorm !== rawId && vRaw !== rawId;
+              });
+              localStorage.setItem(key, JSON.stringify(cleaned));
+            }
+          } catch (e) {
+            // Ignore parse errors
+          }
+        }
+      });
+    } catch (e) {
+      console.warn('LocalStorage cleanup warning during vehicle deletion:', e);
+    }
 
     if (isSupabaseConfigured()) {
       incrementMetric('supabaseWrites');
@@ -760,47 +843,75 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
           await deleteImagesFromStorage(vehicleToDelete.images, 'vehicle-images');
         }
         
-        console.log('[SUPABASE DELETE WORKFLOW] Explicitly cleaning dependencies first:', targetId, rawId);
+        console.log('[SUPABASE DELETE WORKFLOW] Cleaning dependencies and removing vehicle:', targetId, rawId);
         
-        // 1. Delete rows in vehicle_images table
-        const { error: imgErr1 } = await supabase.from('vehicle_images').delete().eq('vehicle_id', targetId);
-        if (imgErr1) console.warn('[SUPABASE DELETE IMAGES ROW ERROR]', imgErr1);
-        if (rawId !== targetId) {
-          await supabase.from('vehicle_images').delete().eq('vehicle_id', rawId);
+        // 2. Clear foreign key references in vehicle_images and leads tables
+        await supabase.from('vehicle_images').delete().or(`vehicle_id.eq.${targetId},vehicle_id.eq.${rawId}`);
+        await supabase.from('leads').update({ vehicle_id: null }).or(`vehicle_id.eq.${targetId},vehicle_id.eq.${rawId}`);
+
+        // 3. Perform hard delete on vehicles table in Supabase
+        const { data: hardDelData, error: hardDelErr } = await supabase
+          .from('vehicles')
+          .delete()
+          .or(`id.eq.${targetId},id.eq.${rawId}`)
+          .select();
+
+        let rowsDeleted = hardDelData ? hardDelData.length : 0;
+
+        if (rowsDeleted === 0 && vehicleToDelete?.registration) {
+          console.log('[SUPABASE DELETE FALLBACK] Attempting delete by registration:', vehicleToDelete.registration);
+          const { data: regDelData } = await supabase
+            .from('vehicles')
+            .delete()
+            .eq('registration', vehicleToDelete.registration)
+            .select();
+          if (regDelData && regDelData.length > 0) rowsDeleted += regDelData.length;
         }
 
-        // 2. Clear vehicle_id in leads table to prevent foreign key errors
-        const { error: leadErr1 } = await supabase.from('leads').update({ vehicle_id: null }).eq('vehicle_id', targetId);
-        if (leadErr1) console.warn('[SUPABASE LEADS UNLINK ERROR]', leadErr1);
-        if (rawId !== targetId) {
-          await supabase.from('leads').update({ vehicle_id: null }).eq('vehicle_id', rawId);
+        if (rowsDeleted === 0 && vehicleToDelete?.make && vehicleToDelete?.model) {
+          console.log('[SUPABASE DELETE FALLBACK] Attempting delete by make/model:', vehicleToDelete.make, vehicleToDelete.model);
+          const { data: mmDelData } = await supabase
+            .from('vehicles')
+            .delete()
+            .eq('make', vehicleToDelete.make)
+            .eq('model', vehicleToDelete.model)
+            .eq('year', vehicleToDelete.year)
+            .select();
+          if (mmDelData && mmDelData.length > 0) rowsDeleted += mmDelData.length;
         }
 
-        // 3. Delete vehicle from Supabase table
-        console.log('[SUPABASE DELETE] Removing vehicle record from Supabase table:', targetId);
-        let { error: delErr } = await supabase.from('vehicles').delete().eq('id', targetId);
+        // 4. Soft-delete backup in Supabase in case hard DELETE RLS policy is restricted or missing
+        console.log('[SUPABASE DELETE SOFT-FALLBACK] Ensuring soft-delete status in Supabase table...');
+        await supabase
+          .from('vehicles')
+          .update({ status: 'Deleted', is_deleted: true })
+          .or(`id.eq.${targetId},id.eq.${rawId}`);
 
-        if (delErr && rawId !== targetId) {
-          console.warn('[SUPABASE DELETE RETRY] Retrying hard delete with raw ID:', rawId);
-          const retryRes = await supabase.from('vehicles').delete().eq('id', rawId);
-          delErr = retryRes.error;
+        if (vehicleToDelete?.registration) {
+          await supabase
+            .from('vehicles')
+            .update({ status: 'Deleted', is_deleted: true })
+            .eq('registration', vehicleToDelete.registration);
         }
 
-        // 4. Soft-delete fallback if hard delete failed (due to missing DELETE policy or table rules)
-        if (delErr) {
-          console.warn('[SUPABASE DELETE FALLBACK] Hard delete failed, applying soft-delete status in Supabase:', delErr);
-          setLastSupabaseError(delErr.message);
+        if (vehicleToDelete?.make && vehicleToDelete?.model) {
+          await supabase
+            .from('vehicles')
+            .update({ status: 'Deleted', is_deleted: true })
+            .eq('make', vehicleToDelete.make)
+            .eq('model', vehicleToDelete.model)
+            .eq('year', vehicleToDelete.year);
+        }
 
-          await supabase.from('vehicles').update({ status: 'Deleted', is_deleted: true }).eq('id', targetId);
-          if (rawId !== targetId) {
-            await supabase.from('vehicles').update({ status: 'Deleted', is_deleted: true }).eq('id', rawId);
-          }
+        if (hardDelErr) {
+          console.warn('[SUPABASE HARD DELETE WARNING]', hardDelErr.message);
+          setLastSupabaseError(hardDelErr.message);
         } else {
           setLastSupabaseError(null);
-          console.log('[SUPABASE DELETE SUCCESS] Vehicle successfully deleted from Supabase:', targetId);
+          console.log(`[SUPABASE DELETE SUCCESS] Vehicle removed from Supabase (${rowsDeleted} rows hard-deleted, soft-delete flags applied)`);
         }
 
-        // 5. Bump metadata version so remote subscribers refresh
+        // 5. Bump metadata version for sync
         try {
           const newVer = Date.now();
           await supabase.from('metadata_versions').upsert({ key: 'vehicles', version: newVer, updated_at: new Date().toISOString() }, { onConflict: 'key' });
