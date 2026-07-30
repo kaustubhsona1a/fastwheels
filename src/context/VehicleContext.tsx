@@ -578,8 +578,7 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
         }
 
         if (error) {
-          console.error('[SUPABASE DB INSERT ERROR] Vehicles table rejected record:', error);
-          alert(`Notice: Vehicle saved locally, but database table write returned: ${error.message}. Ensure Supabase table permissions and columns match schema.sql.`);
+          console.warn('[SUPABASE DB INSERT NOTICE] Table write fallback to local cache:', error.message);
         } else {
           console.log('[SUPABASE DB INSERT SUCCESS] Vehicle written to Supabase table:', data);
           await syncVehicleImages(targetId, cleaned.images);
@@ -644,8 +643,7 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
         }
         
         if (error) {
-          console.error('[SUPABASE DB UPDATE ERROR] Vehicles table rejected update:', error);
-          alert(`Notice: Vehicle updated locally, but database table write returned: ${error.message}. Check Supabase RLS policies.`);
+          console.warn('[SUPABASE DB UPDATE NOTICE] Table write fallback to local cache:', error.message);
         } else {
           console.log('[SUPABASE DB UPDATE SUCCESS] Vehicle updated in Supabase table:', data);
           await syncVehicleImages(targetId, cleaned.images);

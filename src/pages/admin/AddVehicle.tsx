@@ -121,7 +121,7 @@ export default function AdminAddVehicle() {
         });
       } catch (err) {
         console.error('Failed to upload images', err);
-        alert('Failed to upload some images. Ensure Supabase storage bucket "vehicle-images" exists and RLS allows inserts.');
+        console.warn('Failed to upload some images to Supabase storage bucket:', err);
       } finally {
         setIsCompressing(false);
       }
