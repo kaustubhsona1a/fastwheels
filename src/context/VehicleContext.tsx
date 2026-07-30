@@ -746,9 +746,10 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
 
   const removeVehicle = async (id: string) => {
     const targetId = ensureUUID(id);
-    const vehicleToDelete = vehicles.find(v => ensureUUID(v.id) === targetId);
+    const rawId = id;
+    const vehicleToDelete = vehicles.find(v => ensureUUID(v.id) === targetId || v.id === id);
 
-    const nextList = vehicles.filter(v => ensureUUID(v.id) !== targetId);
+    const nextList = vehicles.filter(v => ensureUUID(v.id) !== targetId && v.id !== id);
     setVehicles(nextList);
     await saveToCache('vehicles', nextList);
 
@@ -759,35 +760,57 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
           await deleteImagesFromStorage(vehicleToDelete.images, 'vehicle-images');
         }
         
-        console.log('[SUPABASE DELETE WORKFLOW] Explicitly cleaning dependencies first:', targetId);
+        console.log('[SUPABASE DELETE WORKFLOW] Explicitly cleaning dependencies first:', targetId, rawId);
         
-        // 1. Manually delete rows in vehicle_images table to prevent constraint locks
-        const { error: imgDbErr } = await supabase
-          .from('vehicle_images')
-          .delete()
-          .eq('vehicle_id', targetId);
-        if (imgDbErr) {
-          console.warn('[SUPABASE DELETE IMAGES ROW PRE-CLEANUP ERROR]', imgDbErr);
+        // 1. Delete rows in vehicle_images table
+        const { error: imgErr1 } = await supabase.from('vehicle_images').delete().eq('vehicle_id', targetId);
+        if (imgErr1) console.warn('[SUPABASE DELETE IMAGES ROW ERROR]', imgErr1);
+        if (rawId !== targetId) {
+          await supabase.from('vehicle_images').delete().eq('vehicle_id', rawId);
         }
 
-        // 2. Set vehicle_id to null in leads table to prevent foreign key issues
-        const { error: leadsDbErr } = await supabase
-          .from('leads')
-          .update({ vehicle_id: null })
-          .eq('vehicle_id', targetId);
-        if (leadsDbErr) {
-          console.warn('[SUPABASE UPDATE LEADS VEHICLE_REF PRE-CLEANUP ERROR]', leadsDbErr);
+        // 2. Clear vehicle_id in leads table to prevent foreign key errors
+        const { error: leadErr1 } = await supabase.from('leads').update({ vehicle_id: null }).eq('vehicle_id', targetId);
+        if (leadErr1) console.warn('[SUPABASE LEADS UNLINK ERROR]', leadErr1);
+        if (rawId !== targetId) {
+          await supabase.from('leads').update({ vehicle_id: null }).eq('vehicle_id', rawId);
         }
 
-        console.log('[SUPABASE DELETE] Removing vehicle record:', targetId);
-        const { error } = await supabase.from('vehicles').delete().eq('id', targetId);
-        if (error) {
-          console.error('[SUPABASE DELETE ERROR]', error);
+        // 3. Delete vehicle from Supabase table
+        console.log('[SUPABASE DELETE] Removing vehicle record from Supabase table:', targetId);
+        let { error: delErr } = await supabase.from('vehicles').delete().eq('id', targetId);
+
+        if (delErr && rawId !== targetId) {
+          console.warn('[SUPABASE DELETE RETRY] Retrying hard delete with raw ID:', rawId);
+          const retryRes = await supabase.from('vehicles').delete().eq('id', rawId);
+          delErr = retryRes.error;
+        }
+
+        // 4. Soft-delete fallback if hard delete failed (due to missing DELETE policy or table rules)
+        if (delErr) {
+          console.warn('[SUPABASE DELETE FALLBACK] Hard delete failed, applying soft-delete status in Supabase:', delErr);
+          setLastSupabaseError(delErr.message);
+
+          await supabase.from('vehicles').update({ status: 'Deleted', is_deleted: true }).eq('id', targetId);
+          if (rawId !== targetId) {
+            await supabase.from('vehicles').update({ status: 'Deleted', is_deleted: true }).eq('id', rawId);
+          }
         } else {
-          console.log('[SUPABASE DELETE SUCCESS] Deleted ID:', targetId);
+          setLastSupabaseError(null);
+          console.log('[SUPABASE DELETE SUCCESS] Vehicle successfully deleted from Supabase:', targetId);
         }
-      } catch (err) {
-        console.error('Failed to delete vehicle/images in backend:', err);
+
+        // 5. Bump metadata version so remote subscribers refresh
+        try {
+          const newVer = Date.now();
+          await supabase.from('metadata_versions').upsert({ key: 'vehicles', version: newVer, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+          await saveToCache('vehicles_version', newVer);
+        } catch (e) {
+          console.warn('Metadata version update warning during deletion:', e);
+        }
+      } catch (err: any) {
+        console.error('Failed to delete vehicle in Supabase backend:', err);
+        setLastSupabaseError(err?.message || 'Delete operation exception');
       }
     }
   };
