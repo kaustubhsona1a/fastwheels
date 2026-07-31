@@ -41,14 +41,8 @@
     @apply font-sans bg-[#050505];
   }
   /* Prevent iOS Mobile Safari auto-zooming when tapping/focusing inputs */
-  @media screen and (max-width: 768px) {
-    input[type="text"],
-    input[type="number"],
-    input[type="email"],
-    input[type="password"],
-    input[type="search"],
-    input[type="tel"],
-    input[type="url"],
+  @media screen and (max-width: 1024px) {
+    input,
     select,
     textarea {
       font-size: 16px !important;
