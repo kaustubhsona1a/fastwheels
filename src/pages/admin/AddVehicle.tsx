@@ -77,28 +77,35 @@ export default function AdminAddVehicle() {
     setDraggedIdx(null);
   };
 
+  const loadedVehicleIdRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (isEditing && id) {
-      const vehicle = vehicles.find(v => v.id === id);
-      if (vehicle) {
-        setFormData({
-          make: vehicle.make,
-          model: vehicle.model,
-          variant: vehicle.variant || '',
-          year: vehicle.year,
-          price: vehicle.price.toString(),
-          registration: vehicle.registration || '',
-          fuelType: vehicle.fuelType,
-          transmission: vehicle.transmission,
-          mileage: vehicle.mileage.toString(),
-          ownership: vehicle.ownership,
-          engine: vehicle.engine || '',
-          color: vehicle.color || '',
-          description: vehicle.description || '',
-          instagramReel: vehicle.instagramReel || '',
-        });
-        setImages(vehicle.images || []);
+      if (loadedVehicleIdRef.current !== id) {
+        const vehicle = vehicles.find(v => v.id === id);
+        if (vehicle) {
+          loadedVehicleIdRef.current = id;
+          setFormData({
+            make: vehicle.make,
+            model: vehicle.model,
+            variant: vehicle.variant || '',
+            year: vehicle.year,
+            price: vehicle.price.toString(),
+            registration: vehicle.registration || '',
+            fuelType: vehicle.fuelType,
+            transmission: vehicle.transmission,
+            mileage: vehicle.mileage.toString(),
+            ownership: vehicle.ownership,
+            engine: vehicle.engine || '',
+            color: vehicle.color || '',
+            description: vehicle.description || '',
+            instagramReel: vehicle.instagramReel || '',
+          });
+          setImages(vehicle.images || []);
+        }
       }
+    } else {
+      loadedVehicleIdRef.current = null;
     }
   }, [id, isEditing, vehicles]);
 

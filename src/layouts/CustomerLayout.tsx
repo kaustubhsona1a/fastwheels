@@ -379,10 +379,6 @@ export default function CustomerLayout() {
                 <Phone className="w-5 h-5 text-white mr-3 shrink-0" />
                 <a href="tel:+918169423018" className="hover:text-white transition-colors duration-300 font-mono">+91 81694 23018</a>
               </li>
-              <li className="flex items-center">
-                <Mail className="w-5 h-5 text-[#E63946] mr-3 shrink-0" />
-                <a href="mailto:fastwheels5@gmail.com" className="hover:text-white transition-colors duration-300 font-mono font-bold text-zinc-300">fastwheels5@gmail.com</a>
-              </li>
             </ul>
           </div>
         </div>

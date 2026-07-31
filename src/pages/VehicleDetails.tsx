@@ -639,18 +639,6 @@ export default function VehicleDetails() {
                   </svg>
                   <span className="text-[9px] text-zinc-450 font-mono tracking-wider font-bold uppercase transition-colors group-hover:text-white">Twitter</span>
                 </button>
-
-                <button
-                  onClick={() => {
-                    const subj = `Interested in the ${car.year} ${car.make} ${car.model}`;
-                    const body = `Hey, take a look at this exceptional pre-owned ${car.year} ${car.make} ${car.model} listed at ${formatPrice(car.price)} on the FAST WHEELS website: ${window.location.href}`;
-                    window.open(`mailto:?subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(body)}`);
-                  }}
-                  className="flex flex-col items-center justify-center gap-2 p-3.5 bg-zinc-950/50 hover:bg-zinc-950 border border-zinc-805 rounded-xl transition-all group"
-                >
-                  <Mail className="w-5 h-5 text-zinc-500 transition-transform group-hover:scale-110" />
-                  <span className="text-[9px] text-zinc-450 font-mono tracking-wider font-bold uppercase transition-colors group-hover:text-white">Email</span>
-                </button>
               </div>
 
               {/* Clipboard link copy box */}
