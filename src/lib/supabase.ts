@@ -26,68 +26,87 @@ export function handleSupabaseError(error: unknown, operationType: OperationType
 }
 
 export async function deleteImagesFromStorage(items: any[], bucket: string = 'vehicle-images'): Promise<void> {
-  if (!items || items.length === 0) return;
+  if (!items || !Array.isArray(items) || items.length === 0) return;
 
-  const urls: string[] = [];
+  const rawUrls: string[] = [];
+
   items.forEach(item => {
+    if (!item) return;
     if (typeof item === 'string') {
-      let cleanItem = item;
       if (item.includes('|||')) {
-        cleanItem = item.split('|||')[0];
+        item.split('|||').forEach(part => { if (part) rawUrls.push(part.trim()); });
+      } else {
+        rawUrls.push(item.trim());
       }
-      urls.push(cleanItem);
-    } else if (item && typeof item === 'object') {
-      let mainUrl = item.thumbnail_url || item.gallery_url || item.fullscreen_url || item.image_url;
-      if (mainUrl) {
-        if (typeof mainUrl === 'string' && mainUrl.includes('|||')) {
-          mainUrl = mainUrl.split('|||')[0];
+    } else if (typeof item === 'object') {
+      const keys = ['thumbnail_url', 'gallery_url', 'fullscreen_url', 'image_url', 'url', 'src', 'file_path', 'path'];
+      keys.forEach(key => {
+        const val = item[key];
+        if (typeof val === 'string' && val) {
+          if (val.includes('|||')) {
+            val.split('|||').forEach(part => { if (part) rawUrls.push(part.trim()); });
+          } else {
+            rawUrls.push(val.trim());
+          }
         }
-        urls.push(mainUrl);
-      }
+      });
     }
   });
 
-  const paths = urls.map(url => {
+  if (rawUrls.length === 0) return;
+
+  // Extract bucket and relative path for each URL
+  const bucketToPathsMap = new Map<string, Set<string>>();
+
+  rawUrls.forEach(url => {
+    if (!url || !url.startsWith('http')) return;
     try {
       const urlObj = new URL(url);
-      const pathname = urlObj.pathname;
-      
-      // Look for "/public/bucket_name/" case-insensitively
-      const publicIndex = pathname.toLowerCase().indexOf(`/public/${bucket.toLowerCase()}/`);
-      if (publicIndex !== -1) {
-        const splitStart = publicIndex + `/public/${bucket}/`.length;
-        return decodeURIComponent(pathname.substring(splitStart));
-      }
-      
-      // Alternate check for other Supabase URL structures (e.g. without /public/)
-      const bucketIndex = pathname.toLowerCase().indexOf(`/${bucket.toLowerCase()}/`);
-      if (bucketIndex !== -1) {
-        const splitStart = bucketIndex + `/${bucket}/`.length;
-        return decodeURIComponent(pathname.substring(splitStart));
-      }
+      const pathname = urlObj.pathname; // e.g. /storage/v1/object/public/vehicle-images/vehicles/0.123.webp
 
-      // Fallback for custom domains or different URL formats
-      if (url.toLowerCase().includes(bucket.toLowerCase())) {
-        const fallbackSplit = url.split(new RegExp(bucket + '/', 'i'));
-        if (fallbackSplit.length > 1) {
-          return decodeURIComponent(fallbackSplit[1].split('?')[0]);
+      // Match patterns like /storage/v1/object/public/<bucket>/<filePath>
+      const match = pathname.match(/\/storage\/v1\/object\/(?:public|authenticated|sign)\/([^/]+)\/(.+)$/i);
+      if (match) {
+        const urlBucket = match[1];
+        const relativePath = decodeURIComponent(match[2]);
+        if (!bucketToPathsMap.has(urlBucket)) {
+          bucketToPathsMap.set(urlBucket, new Set());
         }
+        bucketToPathsMap.get(urlBucket)!.add(relativePath);
+      } else {
+        // Fallback checks
+        const targetBuckets = [bucket, 'vehicle-images', 'vehicles'];
+        targetBuckets.forEach(b => {
+          const idx = pathname.toLowerCase().indexOf(`/${b.toLowerCase()}/`);
+          if (idx !== -1) {
+            const relPath = decodeURIComponent(pathname.substring(idx + b.length + 2));
+            if (relPath) {
+              if (!bucketToPathsMap.has(b)) bucketToPathsMap.set(b, new Set());
+              bucketToPathsMap.get(b)!.add(relPath);
+            }
+          }
+        });
       }
-      return null;
     } catch (e) {
-      console.warn('[PATH PARSE ERROR]', e, 'for url:', url);
-      return null;
+      console.warn('[STORAGE PURGE URL PARSE ERROR]', e, 'for url:', url);
     }
-  }).filter(Boolean) as string[];
+  });
 
-  console.log(`[STORAGE PURGE] Attempting to delete ${paths.length} items from bucket "${bucket}":`, paths);
-
-  if (paths.length > 0) {
-    const { data, error } = await supabase.storage.from(bucket).remove(paths);
-    if (error) {
-      console.error(`[STORAGE PURGE ERROR] Failed to delete images from bucket "${bucket}":`, error);
-    } else {
-      console.log(`[STORAGE PURGE SUCCESS] Deleted from bucket "${bucket}":`, data);
+  // Execute deletion for each detected bucket
+  for (const [bkt, pathSet] of bucketToPathsMap.entries()) {
+    const pathList = Array.from(pathSet);
+    if (pathList.length > 0) {
+      console.log(`[STORAGE PURGE] Removing ${pathList.length} files from bucket "${bkt}":`, pathList);
+      try {
+        const { data, error } = await supabase.storage.from(bkt).remove(pathList);
+        if (error) {
+          console.error(`[STORAGE PURGE ERROR] Failed to delete from bucket "${bkt}":`, error);
+        } else {
+          console.log(`[STORAGE PURGE SUCCESS] Removed from bucket "${bkt}":`, data);
+        }
+      } catch (err) {
+        console.error(`[STORAGE PURGE EXCEPTION] Bucket "${bkt}":`, err);
+      }
     }
   }
 }
