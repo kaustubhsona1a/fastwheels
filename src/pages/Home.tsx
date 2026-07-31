@@ -86,11 +86,11 @@ export default function Home() {
             </p>
           </div>
           
-          <div className="relative z-30 flex flex-col sm:flex-row items-center justify-center gap-4 sm:gap-6 w-full max-w-[280px] sm:max-w-xl mx-auto">
+          <div className="relative z-30 flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-6 w-full max-w-[230px] sm:max-w-xl mx-auto">
             {/* Primary CTA */}
             <Link 
               to="/inventory" 
-              className="flex items-center justify-center w-full sm:w-[200px] h-12 bg-[#C1121F] hover:bg-[#FF3B3B] text-white font-bold tracking-wider uppercase text-xs sm:text-sm font-mono rounded-xl transition-all duration-300 text-center shadow-lg shadow-[#C1121F]/40 hover:scale-[1.03] active:scale-95 border border-[#E63946]/50"
+              className="flex items-center justify-center w-full sm:w-[200px] h-10 sm:h-12 bg-[#C1121F] hover:bg-[#FF3B3B] text-white font-bold tracking-wider uppercase text-[11px] sm:text-sm font-mono rounded-xl transition-all duration-300 text-center shadow-lg shadow-[#C1121F]/40 hover:scale-[1.03] active:scale-95 border border-[#E63946]/50"
             >
               Browse Inventory
             </Link>
@@ -98,7 +98,7 @@ export default function Home() {
             {/* Secondary CTA */}
             <a 
               href="tel:+918169423018" 
-              className="flex items-center justify-center w-full sm:w-[200px] h-12 bg-transparent border-2 border-[#E63946] hover:bg-[#C1121F]/20 text-[#E63946] hover:text-white font-bold tracking-wider uppercase text-xs sm:text-sm font-mono rounded-xl transition-all duration-300 text-center shadow-md hover:scale-[1.03] active:scale-95"
+              className="flex items-center justify-center w-full sm:w-[200px] h-10 sm:h-12 bg-transparent border-2 border-[#E63946] hover:bg-[#C1121F]/20 text-[#E63946] hover:text-white font-bold tracking-wider uppercase text-[11px] sm:text-sm font-mono rounded-xl transition-all duration-300 text-center shadow-md hover:scale-[1.03] active:scale-95"
             >
               Contact Us
             </a>
