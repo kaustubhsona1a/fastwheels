@@ -301,8 +301,8 @@ export async function uploadImageToStorage(file: File, path: string, bucket: str
       });
 
     if (uploadError) {
-      console.warn(`Supabase Storage upload error for bucket "${bucket}". Using local data URL fallback:`, uploadError);
-      return await fileToBase64(finalFile);
+      console.error(`Supabase Storage upload error for bucket "${bucket}":`, uploadError);
+      throw uploadError;
     }
 
     const { data } = supabase.storage
@@ -313,10 +313,10 @@ export async function uploadImageToStorage(file: File, path: string, bucket: str
       return data.publicUrl;
     }
 
-    return await fileToBase64(finalFile);
+    throw new Error(`Failed to retrieve public URL from bucket "${bucket}"`);
   } catch (err) {
-    console.warn('Supabase storage upload exception, using local data URL fallback:', err);
-    return await fileToBase64(finalFile);
+    console.error(`Supabase storage upload exception for bucket "${bucket}":`, err);
+    throw err;
   }
 }
 
