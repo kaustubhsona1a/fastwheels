@@ -334,12 +334,12 @@ export default function Inventory() {
                   return (
                     <Link key={car.id} to={`/inventory/${car.id}`} className="group block h-full">
                       <div className="bg-[#171717] border border-[#C1121F]/30 hover:border-[#E63946] hover:shadow-xl hover:shadow-[#C1121F]/20 hover:-translate-y-2 transition-all duration-300 ease-out flex flex-col h-full overflow-hidden rounded-2xl">
-                        <div className="relative aspect-[4/3] sm:aspect-video md:aspect-auto md:h-64 overflow-hidden bg-zinc-950 animate-fade-in">
+                        <div className="relative aspect-[4/3] sm:aspect-video md:aspect-auto md:h-64 overflow-hidden bg-zinc-950">
                           <img src={car.images?.[0] || "https://images.unsplash.com/photo-1503376780353-7e6692767b70?auto=format&fit=crop&q=80&w=800"} alt={`${car.make} ${car.model}`} loading="lazy" className="w-full h-full object-contain bg-zinc-950/80 transition-transform duration-500 ease-out group-hover:scale-[1.06]" />
                           <div className="absolute top-4 left-4 bg-[#C1121F] text-white border border-[#E63946] px-3 py-1 rounded-lg text-xs font-bold tracking-widest font-mono shadow-md">
                             {car.year}
                           </div>
-                          {car.instagramReel && (
+                          {Boolean(car.instagramReel && car.instagramReel.trim()) && (
                             <button
                               onClick={(e) => {
                                 e.preventDefault();

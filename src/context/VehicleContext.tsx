@@ -284,7 +284,7 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
         }
         
         let features = v.features || [];
-        let instagramReel = v.instagram_reel || '';
+        let instagramReel = v.instagram_reel || v.instagramReel || '';
         
         if (Array.isArray(features)) {
           const reelFeature = features.find((f: any) => typeof f === 'string' && f.startsWith('instagram_reel:'));
@@ -505,7 +505,11 @@ export function VehicleProvider({ children }: { children: ReactNode }) {
               }
             });
 
-            setVehicles(mergedList);
+            setVehicles(prev => {
+              const prevJson = JSON.stringify(prev);
+              const nextJson = JSON.stringify(mergedList);
+              return prevJson === nextJson ? prev : mergedList;
+            });
             await saveToCache('vehicles', mergedList);
             await saveToCache('vehicles_version', remoteVersion);
           } else if (error) {
