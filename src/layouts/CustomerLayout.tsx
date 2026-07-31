@@ -393,7 +393,7 @@ export default function CustomerLayout() {
             style={{ touchAction: 'manipulation', WebkitUserSelect: 'none', userSelect: 'none' }}
             className="select-none text-zinc-500 cursor-pointer hover:text-white outline-none active:text-white transition-colors"
           >
-            &copy; {new Date().getFullYear()} FAST WHEELS. All rights reserved.
+            &copy; 2024 FAST WHEELS. All rights reserved.
           </p>
           <div className="flex space-x-6 mt-4 md:mt-0 text-zinc-500">
             <a href="#" className="hover:text-white">Privacy</a>
